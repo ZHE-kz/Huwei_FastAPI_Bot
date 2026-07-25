@@ -1,0 +1,9 @@
+.git
+.github
+.env
+huwei agent.json
+venv
+__pycache__
+*.py[cod]
+*.spec
+start_all.bat

@@ -1,0 +1,7 @@
+name = "huwei-linebot-proxy"
+main = "worker.js"
+compatibility_date = "2026-07-25"
+
+routes = [
+  { pattern = "linebot.zheforge.com", custom_domain = true }
+]
