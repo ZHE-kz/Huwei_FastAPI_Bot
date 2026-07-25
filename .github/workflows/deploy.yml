@@ -14,6 +14,7 @@ env:
   GCP_REGION: asia-east1
   CLOUD_RUN_SERVICE: huwei-fastapi-bot
   CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT: huwei-bot-runtime@taicu-502512.iam.gserviceaccount.com
+  CLOUD_RUN_BUILD_SERVICE_ACCOUNT: huwei-bot-builder@taicu-502512.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -37,6 +38,7 @@ jobs:
             --source . \
             --allow-unauthenticated \
             --service-account "$CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT" \
+            --build-service-account "$CLOUD_RUN_BUILD_SERVICE_ACCOUNT" \
             --no-cpu-throttling \
             --timeout 300 \
             --set-secrets "LINE_ACCESS_TOKEN=LINE_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,CWA_API_KEY=CWA_API_KEY:latest,GOOGLE_DRIVE_FOLDER_ID=GOOGLE_DRIVE_FOLDER_ID:latest" \
