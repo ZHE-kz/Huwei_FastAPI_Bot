@@ -14,7 +14,7 @@ env:
   GCP_REGION: asia-east1
   CLOUD_RUN_SERVICE: huwei-fastapi-bot
   CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT: huwei-bot-runtime@taicu-502512.iam.gserviceaccount.com
-  CLOUD_RUN_BUILD_SERVICE_ACCOUNT: huwei-bot-builder@taicu-502512.iam.gserviceaccount.com
+  CLOUD_RUN_BUILD_SERVICE_ACCOUNT: projects/taicu-502512/serviceAccounts/huwei-bot-builder@taicu-502512.iam.gserviceaccount.com
 
 jobs:
   deploy:
