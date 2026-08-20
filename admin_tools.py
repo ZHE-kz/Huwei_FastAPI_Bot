@@ -1,25 +1,16 @@
-import base64
 import csv
-import hashlib
-import hmac
 import io
-import json
 import re
-import time
 
-import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from openpyxl import load_workbook
 from pydantic import BaseModel
 
-from config import ADMIN_TOKEN
 from firestore_client import get_db
 from puzzle_core import PUZZLE_COLLECTION, force_clear_puzzle_cache, load_puzzle_config, normalize_stage
 
 router = APIRouter(prefix="/admin/puzzles")
-security = HTTPBasic(auto_error=False)
 IMPORT_COLUMNS = [
     "stage_id",
     "agent_intro",
@@ -32,55 +23,6 @@ IMPORT_COLUMNS = [
 ]
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_IMPORT_ROWS = 200
-ARCHIVE_LOGIN_URL = "https://nfu-digital-archive.zheforge.com/api/auth/login"
-ARCHIVE_LOGOUT_URL = "https://nfu-digital-archive.zheforge.com/api/auth/logout"
-ADMIN_COOKIE = "puzzle_admin"
-ADMIN_SESSION_SECONDS = 60 * 60 * 24 * 7
-
-
-def create_admin_session(user):
-    if not ADMIN_TOKEN:
-        raise HTTPException(503, "ADMIN_TOKEN 尚未設定")
-    payload = base64.urlsafe_b64encode(json.dumps({
-        "name": user.get("name", "管理員"),
-        "email": user.get("email", ""),
-        "exp": int(time.time()) + ADMIN_SESSION_SECONDS,
-    }, ensure_ascii=False, separators=(",", ":")).encode()).decode().rstrip("=")
-    signature = hmac.new(ADMIN_TOKEN.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}.{signature}"
-
-
-def read_admin_session(token):
-    if not ADMIN_TOKEN or not token:
-        return None
-    try:
-        payload, signature = token.rsplit(".", 1)
-        expected = hmac.new(ADMIN_TOKEN.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(signature, expected):
-            return None
-        data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-        return data if data.get("exp", 0) > time.time() else None
-    except (ValueError, TypeError, json.JSONDecodeError):
-        return None
-
-
-def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)):
-    basic_valid = (
-        credentials
-        and hmac.compare_digest(credentials.username, "admin")
-        and hmac.compare_digest(credentials.password, ADMIN_TOKEN)
-    )
-    if not ADMIN_TOKEN:
-        raise HTTPException(503, "ADMIN_TOKEN 尚未設定")
-    user = read_admin_session(request.cookies.get(ADMIN_COOKIE, ""))
-    if not basic_valid and not user:
-        raise HTTPException(401, "Unauthorized")
-    return user or {"name": "admin", "email": ""}
-
-
-class ArchiveLogin(BaseModel):
-    email: str
-    password: str
 
 
 class PuzzleSettings(BaseModel):
@@ -170,68 +112,11 @@ def validate_import_rows(rows):
 
 
 @router.get("", response_class=HTMLResponse)
-async def puzzle_admin_page(request: Request):
-    if not read_admin_session(request.cookies.get(ADMIN_COOKIE, "")):
-        return RedirectResponse("/admin/puzzles/login", 303)
+async def puzzle_admin_page():
     return HTMLResponse(ADMIN_HTML)
 
 
-@router.get("/login", response_class=HTMLResponse)
-async def puzzle_admin_login_page(request: Request):
-    if read_admin_session(request.cookies.get(ADMIN_COOKIE, "")):
-        return RedirectResponse("/admin/puzzles", 303)
-    return HTMLResponse(LOGIN_HTML)
-
-
-@router.post("/api/login")
-async def puzzle_admin_login(login: ArchiveLogin):
-    email = login.email.strip().lower()
-    if not email or not login.password or len(email) > 120 or len(login.password) > 80:
-        raise HTTPException(400, "請輸入有效的管理員信箱與密碼")
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            archive_response = await client.post(
-                ARCHIVE_LOGIN_URL,
-                json={"email": email, "password": login.password},
-            )
-            user = archive_response.json().get("user") or {} if archive_response.status_code == 200 else {}
-            if user:
-                try:
-                    await client.post(ARCHIVE_LOGOUT_URL, json={})
-                except httpx.HTTPError:
-                    pass
-    except (httpx.HTTPError, ValueError) as error:
-        raise HTTPException(502, "暫時無法連線數位典藏站") from error
-    if archive_response.status_code != 200:
-        raise HTTPException(401, "信箱或密碼不正確")
-    if user.get("role") != "admin":
-        raise HTTPException(403, "此帳號不是數位典藏站管理員")
-    response = JSONResponse({"ok": True, "user": {"name": user.get("name"), "email": user.get("email")}})
-    response.set_cookie(
-        ADMIN_COOKIE,
-        create_admin_session(user),
-        max_age=ADMIN_SESSION_SECONDS,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        path="/admin/puzzles",
-    )
-    return response
-
-
-@router.get("/api/me")
-async def puzzle_admin_me(user=Depends(require_admin)):
-    return user
-
-
-@router.post("/api/logout")
-async def puzzle_admin_logout():
-    response = JSONResponse({"ok": True})
-    response.delete_cookie(ADMIN_COOKIE, path="/admin/puzzles")
-    return response
-
-
-@router.get("/template.csv", dependencies=[Depends(require_admin)])
+@router.get("/template.csv")
 async def puzzle_template():
     sample = [
         "STAGE_01",
@@ -254,12 +139,12 @@ async def puzzle_template():
     )
 
 
-@router.get("/api", dependencies=[Depends(require_admin)])
+@router.get("/api")
 async def list_puzzles():
     return await load_puzzle_config()
 
 
-@router.post("/api/import", dependencies=[Depends(require_admin)])
+@router.post("/api/import")
 async def import_puzzles(file: UploadFile = File(...)):
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     await file.close()
@@ -281,7 +166,7 @@ async def import_puzzles(file: UploadFile = File(...)):
     return {"ok": True, "imported": len(stages)}
 
 
-@router.put("/api/settings", dependencies=[Depends(require_admin)])
+@router.put("/api/settings")
 async def update_settings(settings: PuzzleSettings):
     if not settings.start_command.strip() or not settings.start_stage.strip():
         raise HTTPException(400, "啟動指令與起始關卡不可空白")
@@ -290,7 +175,7 @@ async def update_settings(settings: PuzzleSettings):
     return {"ok": True}
 
 
-@router.put("/api/stages/{stage_id}", dependencies=[Depends(require_admin)])
+@router.put("/api/stages/{stage_id}")
 async def update_stage(stage_id: str, stage: PuzzleStage):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", stage_id):
         raise HTTPException(400, "關卡 ID 只能使用英數、底線與連字號")
@@ -300,33 +185,22 @@ async def update_stage(stage_id: str, stage: PuzzleStage):
     return {"ok": True, "stage": data}
 
 
-LOGIN_HTML = """<!doctype html>
-<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>解謎後台登入</title><style>
-body{font:16px system-ui;max-width:420px;margin:10vh auto;padding:24px;background:#f5f7f5;color:#18311f}main{background:white;padding:24px;border-radius:12px;box-shadow:0 2px 12px #0001}label{display:block;margin:12px 0 4px}input{box-sizing:border-box;width:100%;padding:10px;border:1px solid #b8c7bb;border-radius:7px}button{width:100%;margin-top:16px;padding:11px;border:0;border-radius:7px;background:#1d7a3b;color:white;cursor:pointer}.error{color:#b42318}
-</style></head><body><main><h1>解謎後台登入</h1><p>請使用數位典藏站的管理員帳號。</p><form id="login"><label>管理員信箱</label><input name="email" type="email" autocomplete="username" required><label>密碼</label><input name="password" type="password" autocomplete="current-password" required><button>登入</button><p id="error" class="error"></p></form></main><script>
-login.onsubmit=async event=>{event.preventDefault();error.textContent='';const button=login.querySelector('button');button.disabled=true;try{const response=await fetch('/admin/puzzles/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(login)))});if(!response.ok)throw new Error((await response.json()).detail||'登入失敗');location.href='/admin/puzzles'}catch(reason){error.textContent=reason.message;button.disabled=false}};
-</script></body></html>"""
-
-
 ADMIN_HTML = """<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>解謎題庫管理</title><style>
 body{font:16px system-ui;max-width:980px;margin:auto;padding:24px;background:#f5f7f5;color:#18311f}h1{margin-top:0}
 section{background:white;padding:20px;margin:16px 0;border-radius:12px;box-shadow:0 2px 12px #0001}label{display:block;margin:10px 0 4px}
-input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #b8c7bb;border-radius:7px}textarea{min-height:76px}button,.button{display:inline-block;margin-top:14px;padding:10px 16px;border:0;border-radius:7px;background:#1d7a3b;color:white;cursor:pointer;text-decoration:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stage{border-top:1px solid #ddd;padding:12px 0}.muted{color:#607067}.status{margin-left:10px}.account{display:flex;align-items:center;gap:10px}.account button{margin:0;background:#607067}@media(max-width:650px){.grid{grid-template-columns:1fr}}
-</style></head><body><h1>解謎題庫管理</h1><div class="account"><span id="admin-user" class="muted"></span><button id="logout" type="button">登出</button></div><p class="muted">使用者輸入啟動指令後，從起始關卡開始。修改會直接寫入 Firestore。</p>
+input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #b8c7bb;border-radius:7px}textarea{min-height:76px}button,.button{display:inline-block;margin-top:14px;padding:10px 16px;border:0;border-radius:7px;background:#1d7a3b;color:white;cursor:pointer;text-decoration:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stage{border-top:1px solid #ddd;padding:12px 0}.muted{color:#607067}.status{margin-left:10px}@media(max-width:650px){.grid{grid-template-columns:1fr}}
+</style></head><body><h1>解謎題庫管理</h1><p class="muted">使用者輸入啟動指令後，從起始關卡開始。修改會直接寫入 Firestore。</p>
 <section><h2>遊戲設定</h2><form id="settings"><div class="grid"><div><label>啟動指令</label><input name="start_command" required></div><div><label>起始關卡</label><input name="start_stage" required></div></div><button>儲存設定</button></form></section>
 <section><h2>試算表匯入</h2><p class="muted">支援 CSV、XLSX，最多 5 MB／200 題。同 ID 關卡會覆寫，其他既有關卡不刪除。</p><form id="upload"><input type="file" name="file" accept=".csv,.xlsx" required><button>上傳並匯入</button><span id="upload-status" class="status"></span></form><a class="button" href="/admin/puzzles/template.csv">下載 CSV 範本</a></section>
 <section><h2>新增／修改關卡</h2><form id="stage"><div class="grid"><div><label>關卡 ID</label><input name="stage_id" placeholder="STAGE_01" required></div><div><label>下一關 ID</label><input name="next_stage_id"></div></div><label>開場文字</label><textarea name="agent_intro" required></textarea><label>圖片辨識目標</label><textarea name="vision_target"></textarea><label><input style="width:auto" type="checkbox" name="requires_image"> 此關需要先上傳照片</label><label>題目／提示</label><textarea name="puzzle_hint" required></textarea><label>正確答案</label><input name="puzzle_answer" required><label>答對訊息</label><textarea name="success_text" required></textarea><button>儲存關卡</button></form></section>
 <section><h2>目前關卡</h2><div id="list"></div></section><script>
-const settings=document.querySelector('#settings'),stage=document.querySelector('#stage'),upload=document.querySelector('#upload'),list=document.querySelector('#list'),uploadStatus=document.querySelector('#upload-status'),adminUser=document.querySelector('#admin-user'),logout=document.querySelector('#logout');
-async function api(path='',options={}){const headers=options.body instanceof FormData?{}:{'Content-Type':'application/json'};const r=await fetch('/admin/puzzles/api'+path,{...options,headers:{...headers,...options.headers}});if(r.status===401){location.href='/admin/puzzles/login';throw new Error('請重新登入')}if(!r.ok)throw new Error(await r.text());return r.json()}
-async function loadAdmin(){const user=await api('/me');adminUser.textContent=`${user.name} ${user.email?`（${user.email}）`:''}`}
+const settings=document.querySelector('#settings'),stage=document.querySelector('#stage'),upload=document.querySelector('#upload'),list=document.querySelector('#list'),uploadStatus=document.querySelector('#upload-status');
+async function api(path='',options={}){const headers=options.body instanceof FormData?{}:{'Content-Type':'application/json'};const r=await fetch('/admin/puzzles/api'+path,{...options,headers:{...headers,...options.headers}});if(!r.ok)throw new Error(await r.text());return r.json()}
 async function load(){const data=await api();settings.start_command.value=data.settings.start_command;settings.start_stage.value=data.settings.start_stage;list.replaceChildren(...Object.entries(data.stages).sort().map(([id,s])=>{const row=document.createElement('div');row.className='stage';const title=document.createElement('strong');title.textContent=id+' — '+s.puzzle_hint;const edit=document.createElement('button');edit.textContent='編輯';edit.onclick=()=>fill(id,s);row.append(title,document.createElement('br'),edit);return row}))}
 function fill(id,s){stage.stage_id.value=id;for(const [key,value] of Object.entries(s)){if(stage[key])stage[key].type==='checkbox'?stage[key].checked=value:stage[key].value=value??''}stage.scrollIntoView({behavior:'smooth'})}
 settings.onsubmit=async e=>{e.preventDefault();await api('/settings',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(settings)))});alert('設定已儲存')};
 upload.onsubmit=async e=>{e.preventDefault();uploadStatus.textContent='匯入中…';try{const result=await api('/import',{method:'POST',body:new FormData(upload)});uploadStatus.textContent='已匯入 '+result.imported+' 題';upload.reset();await load()}catch(error){uploadStatus.textContent='匯入失敗：'+error.message}};
-stage.onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(stage));const id=data.stage_id;delete data.stage_id;data.requires_image=stage.requires_image.checked;await api('/stages/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify(data)});alert('關卡已儲存');await load()};
-logout.onclick=async()=>{await api('/logout',{method:'POST'});location.href='/admin/puzzles/login'};loadAdmin();load();
+stage.onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(stage));const id=data.stage_id;delete data.stage_id;data.requires_image=stage.requires_image.checked;await api('/stages/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify(data)});alert('關卡已儲存');await load()};load();
 </script></body></html>"""
