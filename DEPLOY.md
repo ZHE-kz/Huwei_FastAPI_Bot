@@ -11,6 +11,7 @@
 - `GEMINI_API_KEY`
 - `CWA_API_KEY`
 - `GOOGLE_DRIVE_FOLDER_ID`
+- `ADMIN_TOKEN`
 - 其他 `.env` 中實際使用的設定
 
 Cloud Run 使用服務帳戶的 Application Default Credentials 存取 Firestore 與 Drive，不要上傳 `huwei agent.json`。請將 Drive 目標資料夾分享給 Cloud Run 執行身分，並授予 Secret Manager Secret Accessor。
@@ -31,3 +32,9 @@ Repository secrets：
 ## LINE Developers
 
 Webhook URL 設為 `https://linebot.zheforge.com/`，啟用 Webhook 後執行 Verify。服務會驗證 `X-Line-Signature`。
+
+## 解謎管理後台
+
+網址：`https://linebot.zheforge.com/admin/puzzles`
+
+帳號：`admin`；密碼讀取本機 `.env` 的 `ADMIN_TOKEN`，題目儲存在 Firestore `PuzzleConfig`。

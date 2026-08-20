@@ -1,6 +1,7 @@
 import base64
 import csv
 import io
+import time
 from datetime import datetime, timezone
 
 import google.generativeai as genai
@@ -9,7 +10,77 @@ import httpx
 from firestore_client import get_db
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQhKOMFVy6CQusZgXpKZ3rbDjxk0Z3a2Z9tG1MFKJ8hG3jxSUODM6lKDw2x-p1L5dd_SdPMPJOWaeE/pub?gid=531672485&single=true&output=csv"
-START_STAGE = "STAGE_01"
+PUZZLE_COLLECTION = "PuzzleConfig"
+DEFAULT_SETTINGS = {"start_command": "壁虎我來幫忙", "start_stage": "STAGE_01"}
+
+_config_cache = None
+_config_cache_until = 0
+
+
+def force_clear_puzzle_cache():
+    global _config_cache, _config_cache_until
+    _config_cache = None
+    _config_cache_until = 0
+
+
+def normalize_stage(stage_id, data):
+    vision_target = str(data.get("vision_target", "")).strip()
+    return {
+        "stage_id": stage_id,
+        "agent_intro": str(data.get("agent_intro") or data.get("puzzle_hint") or f"開始 {stage_id} 關卡！").strip(),
+        "vision_target": vision_target,
+        "puzzle_hint": str(data.get("puzzle_hint", "")).strip(),
+        "puzzle_answer": str(data.get("puzzle_answer", "")).strip(),
+        "success_text": str(data.get("success_text") or "答對了！").strip(),
+        "next_stage_id": str(data.get("next_stage_id", "")).strip(),
+        "requires_image": data.get("requires_image", bool(vision_target)) in (True, "true", "1", 1),
+    }
+
+
+async def load_puzzle_config():
+    global _config_cache, _config_cache_until
+    if _config_cache and time.monotonic() < _config_cache_until:
+        return _config_cache
+
+    stages = {}
+    settings = DEFAULT_SETTINGS.copy()
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(SHEET_CSV_URL)
+            response.raise_for_status()
+        for row in csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"))):
+            stage_id = row.get("stage_id", "").strip()
+            if stage_id:
+                stages[stage_id] = normalize_stage(stage_id, row)
+    except Exception as error:
+        print(f"[PUZZLE] 讀取預設試算表失敗: {error}")
+
+    try:
+        for document in get_db().collection(PUZZLE_COLLECTION).stream():
+            data = document.to_dict() or {}
+            if document.id == "_settings":
+                settings.update({key: str(data.get(key, settings[key])).strip() for key in settings})
+            else:
+                stages[document.id] = normalize_stage(document.id, data)
+    except Exception as error:
+        print(f"[PUZZLE] 讀取 Firestore 題庫失敗: {error}")
+
+    _config_cache = {"settings": settings, "stages": stages}
+    _config_cache_until = time.monotonic() + 300
+    return _config_cache
+
+
+async def should_route_to_puzzle(user_id, user_text=""):
+    config = await load_puzzle_config()
+    if user_text.strip() == config["settings"]["start_command"]:
+        return True
+    state = get_db().collection("PuzzleState").document(user_id).get()
+    return state.exists and (state.to_dict() or {}).get("status") != "COMPLETED"
+
+
+def stage_status(stage):
+    return "WAITING_IMAGE" if stage.get("requires_image") else "WAITING_TEXT"
 
 
 async def process_puzzle_event(
@@ -21,148 +92,95 @@ async def process_puzzle_event(
     line_token,
     gemini_key,
 ):
-    db = get_db()
-    current_time = datetime.now(timezone.utc)
-    state_ref = db.collection("PuzzleState").document(user_id)
+    config = await load_puzzle_config()
+    settings = config["settings"]
+    stages = config["stages"]
+    state_ref = get_db().collection("PuzzleState").document(user_id)
     state_doc = state_ref.get()
+    state = state_doc.to_dict() if state_doc.exists else {}
+    now = datetime.now(timezone.utc)
 
-    puzzle_config = {}
-    try:
-        async with httpx.AsyncClient() as client:
-            sheet_resp = await client.get(SHEET_CSV_URL)
-            sheet_resp.raise_for_status()
-
-            # 支援 utf-8-sig 格式以正確處理 Google 試算表的 BOM 標頭
-            csv_text = sheet_resp.content.decode("utf-8-sig")
-
-            reader = csv.DictReader(io.StringIO(csv_text))
-            for row in reader:
-                stage_id = row.get("stage_id", "").strip()
-                if stage_id:
-                    puzzle_config[stage_id] = row
-
-    except Exception as e:
-        print(f"[ERROR] 讀取 Google 試算表失敗: {e}")
-        return False
-
-    # ==========================================
-    # 狀態 A：尚未開始遊戲或已完成，等待觸發指令
-    # ==========================================
-    if not state_doc.exists or state_doc.to_dict().get("status") == "COMPLETED":
-        if user_text and user_text.strip() == "壁虎我來幫忙":
-            if START_STAGE not in puzzle_config:
-                error_msg = (
-                    f"哎呀... 找不到起始關卡設定 {START_STAGE}。"
-                    f"目前的關卡清單：{list(puzzle_config.keys())}"
-                )
-                await send_line_reply(line_token, reply_token, error_msg)
-                return True
-
-            state_ref.set(
-                {
-                    "current_stage": START_STAGE,
-                    "status": "WAITING_IMAGE",
-                    "last_active": current_time,
-                }
-            )
-            await send_line_reply(
-                line_token,
-                reply_token,
-                puzzle_config[START_STAGE]["agent_intro"],
-            )
+    if not state or state.get("status") == "COMPLETED":
+        if user_text.strip() != settings["start_command"]:
+            return False
+        start_stage = settings["start_stage"]
+        stage = stages.get(start_stage)
+        if not stage:
+            await send_line_reply(line_token, reply_token, f"找不到起始關卡：{start_stage}")
             return True
+        state_ref.set({"current_stage": start_stage, "status": stage_status(stage), "last_active": now})
+        await send_line_reply(line_token, reply_token, stage["agent_intro"])
+        return True
 
-    # 狀態 B：遊戲進行中
-    user_state = state_doc.to_dict() if state_doc.exists else {}
-    current_stage = user_state.get("current_stage", "STAGE_01")
-    game_status = user_state.get("status", "WAITING_IMAGE")
-    stage_data = puzzle_config.get(current_stage)
+    if user_text.strip() == "結束解謎":
+        state_ref.update({"status": "COMPLETED", "last_active": now})
+        await send_line_reply(line_token, reply_token, "已結束解謎遊戲。")
+        return True
 
-    if not stage_data:
-        return False
+    current_stage = state.get("current_stage", settings["start_stage"])
+    game_status = state.get("status", "WAITING_TEXT")
+    stage = stages.get(current_stage)
+    if not stage:
+        await send_line_reply(line_token, reply_token, f"找不到目前關卡：{current_stage}")
+        return True
 
-    # 1. 狀態：等待玩家上傳解謎圖片
     if game_status == "WAITING_IMAGE" and image_base64:
         genai.configure(api_key=gemini_key)
-        vision_model = genai.GenerativeModel("gemini-2.5-flash")
-        image_bytes = base64.b64decode(image_base64)
-
+        model = genai.GenerativeModel("gemini-2.5-flash")
         prompt = (
-            f"請幫我檢查這張照片是否符合目標：{stage_data['vision_target']}。"
-            "如果符合，請回答「辨識成功」；如果不符合，請簡述原因。"
-            "請嚴格判斷，不要輕易放行。"
+            f"請檢查照片是否符合目標：{stage['vision_target']}。"
+            "符合只回答「辨識成功」；不符合請簡述原因。請嚴格判斷。"
         )
-
         try:
-            response = vision_model.generate_content(
-                [prompt, {"mime_type": "image/jpeg", "data": image_bytes}]
+            response = await model.generate_content_async(
+                [prompt, {"mime_type": "image/jpeg", "data": base64.b64decode(image_base64)}]
             )
             if "辨識成功" in response.text:
-                state_ref.update({"status": "WAITING_TEXT", "last_active": current_time})
-                await send_line_reply(line_token, reply_token, stage_data["puzzle_hint"])
+                state_ref.update({"status": "WAITING_TEXT", "last_active": now})
+                await send_line_reply(line_token, reply_token, stage["puzzle_hint"] or "照片正確，請輸入答案。")
             else:
+                await send_line_reply(line_token, reply_token, "照片似乎不符合目標，請再拍一張看看！")
+        except Exception as error:
+            print(f"[PUZZLE] 圖片辨識失敗: {error}")
+            await send_line_reply(line_token, reply_token, "圖片辨識發生錯誤，請稍後再試。")
+        return True
+
+    if game_status == "WAITING_TEXT" and user_text:
+        answer = stage["puzzle_answer"]
+        if answer and answer.casefold() in user_text.strip().casefold():
+            next_stage_id = stage["next_stage_id"]
+            next_stage = stages.get(next_stage_id)
+            if next_stage:
+                state_ref.update({
+                    "current_stage": next_stage_id,
+                    "status": stage_status(next_stage),
+                    "last_active": now,
+                })
                 await send_line_reply(
                     line_token,
                     reply_token,
-                    "唔... 這張照片似乎還差了一點，請再拍一張看看！",
+                    f"{stage['success_text']}\\n\\n{next_stage['agent_intro']}",
                 )
-        except Exception:
-            await send_line_reply(line_token, reply_token, "大腦思考時發生了一點小意外，請再傳一次照片。")
-
-        return True
-
-    # 2. 狀態：等待玩家輸入文字答案
-    if game_status == "WAITING_TEXT" and user_text:
-        user_reply = user_text.strip()
-        correct_answer = str(stage_data.get("puzzle_answer", "")).strip()
-
-        if correct_answer in user_reply:
-            state_ref.update({"status": "COMPLETED", "last_active": current_time})
-            await send_line_reply(line_token, reply_token, stage_data["success_text"])
+            else:
+                state_ref.update({"status": "COMPLETED", "last_active": now})
+                await send_line_reply(line_token, reply_token, stage["success_text"])
         else:
-            # 🌟 修復原本斷行與亂碼錯誤的 f-string
-            hint_msg = f"❌ 答錯囉！\n\n提示：{stage_data['puzzle_hint']}"
-            await send_line_reply(line_token, reply_token, hint_msg)
-
+            await send_line_reply(line_token, reply_token, f"❌ 答錯囉！\\n\\n提示：{stage['puzzle_hint']}")
         return True
 
-    # 3. 防呆提示處理
-    if game_status == "WAITING_IMAGE":
-        await send_line_reply(
-            line_token,
-            reply_token,
-            "📸 收到！現在請依照任務指示，拍下對應的照片傳給我喔！",
-        )
-        return True
-
-    if game_status == "WAITING_TEXT":
-        await send_line_reply(
-            line_token,
-            reply_token,
-            "✍️ 收到！請直接輸入你的解謎答案文字給我！",
-        )
-        return True
-
-    return False
+    prompt = "📸 請依任務指示上傳照片。" if game_status == "WAITING_IMAGE" else "✍️ 請直接輸入解謎答案。"
+    await send_line_reply(line_token, reply_token, prompt)
+    return True
 
 
 async def send_line_reply(line_token, reply_token, text):
     if not text or not text.strip():
-        print("⚠️ 警告：嘗試發送空訊息，已攔截！")
         return
-
-    async with httpx.AsyncClient() as client:
-        url = "https://api.line.me/v2/bot/message/reply"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {line_token}",
-        }
-        payload = {
-            "replyToken": reply_token, 
-            "messages": [{"type": "text", "text": text}]
-        }
-        r = await client.post(url, headers=headers, json=payload)
-        
-        # 🌟 印出 LINE 的真實抱怨內容
-        if r.status_code != 200:
-            print(f"🚨 LINE Reply 400 報錯詳情: {r.status_code} - {r.text}")
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            "https://api.line.me/v2/bot/message/reply",
+            headers={"Authorization": f"Bearer {line_token}"},
+            json={"replyToken": reply_token, "messages": [{"type": "text", "text": text}]},
+        )
+    if response.status_code != 200:
+        print(f"[PUZZLE] LINE 回覆失敗: {response.status_code} - {response.text}")

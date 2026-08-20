@@ -5,12 +5,14 @@ import json
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 import httpx
 from datetime import datetime
+from admin_tools import router as puzzle_admin_router
 from config import CWA_API_KEY, GEMINI_API_KEY, LINE_ACCESS_TOKEN, LINE_CHANNEL_SECRET
 from itinerary_processor import process_image_identification, process_itinerary
-from puzzle_core import process_puzzle_event
+from puzzle_core import process_puzzle_event, should_route_to_puzzle
 from firestore_client import get_db
 
 app = FastAPI()
+app.include_router(puzzle_admin_router)
 
 missing_env = [
     name
@@ -63,6 +65,28 @@ async def background_task_router(payload: dict):
                 continue
 
             await send_loading_animation(user_id, LINE_ACCESS_TOKEN, seconds=60)
+
+            route_to_puzzle = await should_route_to_puzzle(user_id, user_text)
+            puzzle_image = None
+            if route_to_puzzle and message_type == "image" and message.get("id"):
+                async with httpx.AsyncClient(timeout=15) as client:
+                    response = await client.get(
+                        f"https://api-data.line.me/v2/bot/message/{message['id']}/content",
+                        headers={"Authorization": f"Bearer {LINE_ACCESS_TOKEN}"},
+                    )
+                    response.raise_for_status()
+                    puzzle_image = base64.b64encode(response.content).decode()
+
+            if route_to_puzzle and await process_puzzle_event(
+                reply_token=reply_token,
+                user_id=user_id,
+                user_text=user_text,
+                message_id=message.get("id"),
+                image_base64=puzzle_image,
+                line_token=LINE_ACCESS_TOKEN,
+                gemini_key=GEMINI_API_KEY,
+            ):
+                continue
             
             # 1. 處理圖片辨識
             if message_type == "image":
@@ -135,32 +159,7 @@ async def background_task_router(payload: dict):
                         print(f"🚨 圖片處理過程發生錯誤:\n{traceback.format_exc()}")
                 continue
 
-            # 2. 文字訊息分流處理
-            db = get_db()
-            state_ref = db.collection("PuzzleState").document(user_id)
-            state_doc = state_ref.get()
-            
-            is_in_puzzle_game = False
-            if state_doc.exists:
-                status = state_doc.to_dict().get("status")
-                if status and status != "COMPLETED":
-                    is_in_puzzle_game = True
-
-            # 檢查是否為解謎遊戲
-            if user_text == "壁虎我來幫忙" or is_in_puzzle_game:
-                is_puzzle = await process_puzzle_event(
-                    reply_token=reply_token,
-                    user_id=user_id,
-                    user_text=user_text,
-                    message_id=message.get("id"),
-                    image_base64=None,
-                    line_token=LINE_ACCESS_TOKEN,
-                    gemini_key=GEMINI_API_KEY,
-                )
-                if is_puzzle:
-                    continue
-
-            # 3. 交給行程與一般導覽大腦
+            # 2. 交給行程與一般導覽大腦
             await process_itinerary(
                 reply_token,
                 user_id,
