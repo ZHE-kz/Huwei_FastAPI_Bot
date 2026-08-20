@@ -1,12 +1,18 @@
+import base64
 import csv
+import hashlib
+import hmac
 import io
+import json
 import re
+import time
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from openpyxl import load_workbook
 from pydantic import BaseModel
 
+from config import PUZZLE_ADMIN_SECRET
 from firestore_client import get_db
 from puzzle_core import PUZZLE_COLLECTION, force_clear_puzzle_cache, load_puzzle_config, normalize_stage
 
@@ -23,6 +29,33 @@ IMPORT_COLUMNS = [
 ]
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_IMPORT_ROWS = 200
+ACCESS_COOKIE = "puzzle_access"
+ACCESS_SECONDS = 60 * 60 * 8
+
+
+def sign_access(data):
+    if not PUZZLE_ADMIN_SECRET:
+        raise HTTPException(503, "後台通行密鑰尚未設定")
+    payload = base64.urlsafe_b64encode(json.dumps(data, separators=(",", ":")).encode()).decode().rstrip("=")
+    signature = hmac.new(PUZZLE_ADMIN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def verify_access(token):
+    try:
+        payload, signature = token.rsplit(".", 1)
+        expected = hmac.new(PUZZLE_ADMIN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not PUZZLE_ADMIN_SECRET or not hmac.compare_digest(signature, expected):
+            return None
+        data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        return data if data.get("exp", 0) > time.time() else None
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def require_access(request: Request):
+    if not verify_access(request.cookies.get(ACCESS_COOKIE, "")):
+        raise HTTPException(403, "請從數位典藏館管理後台進入")
 
 
 class PuzzleSettings(BaseModel):
@@ -111,12 +144,29 @@ def validate_import_rows(rows):
     return stages
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get("/enter")
+async def puzzle_admin_enter(token: str):
+    if not verify_access(token):
+        raise HTTPException(403, "通行連結無效或已過期")
+    response = RedirectResponse("/admin/puzzles", 303)
+    response.set_cookie(
+        ACCESS_COOKIE,
+        sign_access({"exp": int(time.time()) + ACCESS_SECONDS}),
+        max_age=ACCESS_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/admin/puzzles",
+    )
+    return response
+
+
+@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_access)])
 async def puzzle_admin_page():
     return HTMLResponse(ADMIN_HTML)
 
 
-@router.get("/template.csv")
+@router.get("/template.csv", dependencies=[Depends(require_access)])
 async def puzzle_template():
     sample = [
         "STAGE_01",
@@ -139,12 +189,12 @@ async def puzzle_template():
     )
 
 
-@router.get("/api")
+@router.get("/api", dependencies=[Depends(require_access)])
 async def list_puzzles():
     return await load_puzzle_config()
 
 
-@router.post("/api/import")
+@router.post("/api/import", dependencies=[Depends(require_access)])
 async def import_puzzles(file: UploadFile = File(...)):
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     await file.close()
@@ -166,7 +216,7 @@ async def import_puzzles(file: UploadFile = File(...)):
     return {"ok": True, "imported": len(stages)}
 
 
-@router.put("/api/settings")
+@router.put("/api/settings", dependencies=[Depends(require_access)])
 async def update_settings(settings: PuzzleSettings):
     if not settings.start_command.strip() or not settings.start_stage.strip():
         raise HTTPException(400, "啟動指令與起始關卡不可空白")
@@ -175,7 +225,7 @@ async def update_settings(settings: PuzzleSettings):
     return {"ok": True}
 
 
-@router.put("/api/stages/{stage_id}")
+@router.put("/api/stages/{stage_id}", dependencies=[Depends(require_access)])
 async def update_stage(stage_id: str, stage: PuzzleStage):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", stage_id):
         raise HTTPException(400, "關卡 ID 只能使用英數、底線與連字號")

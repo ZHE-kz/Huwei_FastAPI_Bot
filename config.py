@@ -10,6 +10,7 @@ LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 CWA_API_KEY = os.environ.get("CWA_API_KEY", "")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+PUZZLE_ADMIN_SECRET = os.environ.get("PUZZLE_ADMIN_SECRET", "")
 
 # Flex Message 卡片與 UI 預設設定
 PRIMARY_COLOR = "#1DB446"
