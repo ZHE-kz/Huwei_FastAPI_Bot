@@ -46,7 +46,7 @@ async def load_puzzle_config():
     settings = DEFAULT_SETTINGS.copy()
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             response = await client.get(SHEET_CSV_URL)
             response.raise_for_status()
         for row in csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"))):
@@ -176,7 +176,7 @@ async def process_puzzle_event(
 async def send_line_reply(line_token, reply_token, text):
     if not text or not text.strip():
         return
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
         response = await client.post(
             "https://api.line.me/v2/bot/message/reply",
             headers={"Authorization": f"Bearer {line_token}"},
