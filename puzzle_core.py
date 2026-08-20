@@ -84,6 +84,11 @@ def stage_status(stage):
     return "WAITING_IMAGE" if stage.get("requires_image") else "WAITING_TEXT"
 
 
+def stage_message(stage):
+    parts = [stage.get("agent_intro", "").strip(), stage.get("puzzle_hint", "").strip()]
+    return '\n\n'.join(dict.fromkeys(part for part in parts if part))
+
+
 async def process_puzzle_event(
     reply_token,
     user_id,
@@ -115,7 +120,7 @@ async def process_puzzle_event(
             await send_line_reply(line_token, reply_token, f"找不到起始關卡：{start_stage}")
             return True
         state_ref.set({"current_stage": start_stage, "status": stage_status(stage), "last_active": now})
-        await send_line_reply(line_token, reply_token, stage["agent_intro"])
+        await send_line_reply(line_token, reply_token, stage_message(stage))
         return True
 
     current_stage = state.get("current_stage", settings["start_stage"])
@@ -160,7 +165,7 @@ async def process_puzzle_event(
                 await send_line_reply(
                     line_token,
                     reply_token,
-                    f"{stage['success_text']}\\n\\n{next_stage['agent_intro']}",
+                    f"{stage['success_text']}\n\n{stage_message(next_stage)}",
                 )
             else:
                 state_ref.update({"status": "COMPLETED", "last_active": now})
