@@ -1,5 +1,6 @@
 # src/itinerary_processor.py
 import json
+import html
 import traceback
 import hashlib
 import asyncio
@@ -20,7 +21,7 @@ from config import PROMOTE_TO_DB_THRESHOLD
 
 # 🌟 全域宣告模型
 model = genai.GenerativeModel("gemini-2.5-flash")
-ARCHIVE_LOCATIONS_URL = "https://nfu-digital-archive.zheforge.com/api/locations"
+ARCHIVE_ARTICLES_URL = "https://nfu-digital-archive.zheforge.com/api/articles?category=history"
 
 # ==========================================
 # ⚡ 記憶體暫存口袋 (0 延遲且不用讀資料庫)
@@ -371,24 +372,24 @@ async def process_itinerary(
 # 🌟 模組二：滿血圖片辨識 (加入記憶體快取)
 # ==========================================
 async def process_image_identification(image_bytes, user_id):
-    """從數位典藏站抓取地點資料，進行視覺辨識與導覽生成"""
+    """從數位典藏歷史館抓取文章，進行視覺辨識與導覽生成"""
     image_hash = hashlib.sha256(image_bytes).hexdigest()
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            archive_response = await client.get(ARCHIVE_LOCATIONS_URL)
+            archive_response = await client.get(ARCHIVE_ARTICLES_URL)
             archive_response.raise_for_status()
-        locations = archive_response.json().get("locations", [])
+        articles = archive_response.json().get("articles", [])
         knowledge_by_place = {
-            str(location.get("title", "")).strip(): location
-            for location in locations
-            if str(location.get("title", "")).strip()
+            str(article.get("title", "")).strip(): article
+            for article in articles
+            if str(article.get("title", "")).strip()
         }
         if not knowledge_by_place:
-            raise ValueError("數位典藏站沒有可用地點")
+            raise ValueError("數位典藏站沒有可用歷史文章")
     except Exception as e:
         print("抓取數位典藏站資料失敗:", e)
-        ai_response_text = "目前無法讀取數位典藏資料，請稍後再試。"
+        ai_response_text = "目前無法讀取數位典藏歷史資料，請稍後再試。"
         set_user_cache(user_id, ai_response_text)
         return {"aiResponse": ai_response_text, "locationName": "", "hash": image_hash}
 
@@ -425,7 +426,7 @@ async def process_image_identification(image_bytes, user_id):
 
     if best_place == "未知地點":
         observation = visual_text.replace("鑑定結果：未知地點", "").strip()
-        ai_response_text = f"哎呀，我判斷不出來這是哪裡，或者該景點尚未收錄在數位典藏站哦！\n\n🔍 導遊的觀察筆記：\n{observation}"
+        ai_response_text = f"哎呀，我判斷不出來這是哪裡，或者該景點尚未收錄在數位典藏歷史館哦！\n\n🔍 導遊的觀察筆記：\n{observation}"
         
         # ⚡ 存入口袋
         set_user_cache(user_id, ai_response_text)
@@ -438,10 +439,16 @@ async def process_image_identification(image_bytes, user_id):
             "needsConfirmation": True
         }
 
-    location = knowledge_by_place[best_place]
-    category = location.get("category", "")
-    summary = location.get("summary", "")
-    local_knowledge = f"【類別】：{category}\n【典藏摘要】：\n{summary}"
+    article = knowledge_by_place[best_place]
+    content = html.unescape(re.sub(r"<[^>]+>", " ", article.get("content", "")))
+    content = re.sub(r"\s+", " ", content).strip()
+    local_knowledge = (
+        f"【館藏類型】：{article.get('collection_type', '')}\n"
+        f"【年代】：{article.get('period', '')}\n"
+        f"【地點】：{article.get('location_name', '')}\n"
+        f"【摘要】：{article.get('summary', '')}\n"
+        f"【正文】：{content}"
+    )
 
     intro_prompt = f"""你是一個專業、熱情的在地導遊。請根據以下關於「{best_place}」的歷史背景知識，為遊客寫一段生動、引人入勝的景點導覽介紹。
     
