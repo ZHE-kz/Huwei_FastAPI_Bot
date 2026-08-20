@@ -38,3 +38,7 @@ Webhook URL 設為 `https://linebot.zheforge.com/`，啟用 Webhook 後執行 Ve
 網址：`https://linebot.zheforge.com/admin/puzzles`
 
 帳號：`admin`；密碼讀取本機 `.env` 的 `ADMIN_TOKEN`，題目儲存在 Firestore `PuzzleConfig`。
+
+### 試算表匯入
+
+後台支援 `.csv`、`.xlsx`，必要欄位為 `stage_id`、`puzzle_answer`。可先下載 CSV 範本；同 ID 關卡會覆寫，其他既有關卡不刪除。
