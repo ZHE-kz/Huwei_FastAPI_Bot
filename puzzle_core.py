@@ -12,6 +12,7 @@ from firestore_client import get_db
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQhKOMFVy6CQusZgXpKZ3rbDjxk0Z3a2Z9tG1MFKJ8hG3jxSUODM6lKDw2x-p1L5dd_SdPMPJOWaeE/pub?gid=531672485&single=true&output=csv"
 PUZZLE_COLLECTION = "PuzzleConfig"
 DEFAULT_SETTINGS = {"start_command": "壁虎我來幫忙", "start_stage": "STAGE_01"}
+END_COMMAND = "結束解謎"
 
 _config_cache = None
 _config_cache_until = 0
@@ -73,7 +74,7 @@ async def load_puzzle_config():
 
 async def should_route_to_puzzle(user_id, user_text=""):
     config = await load_puzzle_config()
-    if user_text.strip() == config["settings"]["start_command"]:
+    if user_text.strip() in {config["settings"]["start_command"], END_COMMAND}:
         return True
     state = get_db().collection("PuzzleState").document(user_id).get()
     return state.exists and (state.to_dict() or {}).get("status") != "COMPLETED"
@@ -100,6 +101,11 @@ async def process_puzzle_event(
     state = state_doc.to_dict() if state_doc.exists else {}
     now = datetime.now(timezone.utc)
 
+    if user_text.strip() == END_COMMAND:
+        state_ref.set({"status": "COMPLETED", "last_active": now}, merge=True)
+        await send_line_reply(line_token, reply_token, "已結束解謎遊戲。")
+        return True
+
     if not state or state.get("status") == "COMPLETED":
         if user_text.strip() != settings["start_command"]:
             return False
@@ -110,11 +116,6 @@ async def process_puzzle_event(
             return True
         state_ref.set({"current_stage": start_stage, "status": stage_status(stage), "last_active": now})
         await send_line_reply(line_token, reply_token, stage["agent_intro"])
-        return True
-
-    if user_text.strip() == "結束解謎":
-        state_ref.update({"status": "COMPLETED", "last_active": now})
-        await send_line_reply(line_token, reply_token, "已結束解謎遊戲。")
         return True
 
     current_stage = state.get("current_stage", settings["start_stage"])
