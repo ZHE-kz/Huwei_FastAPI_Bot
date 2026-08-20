@@ -20,6 +20,7 @@ from config import PROMOTE_TO_DB_THRESHOLD
 
 # 🌟 全域宣告模型
 model = genai.GenerativeModel("gemini-2.5-flash")
+ARCHIVE_LOCATIONS_URL = "https://nfu-digital-archive.zheforge.com/api/locations"
 
 # ==========================================
 # ⚡ 記憶體暫存口袋 (0 延遲且不用讀資料庫)
@@ -370,17 +371,28 @@ async def process_itinerary(
 # 🌟 模組二：滿血圖片辨識 (加入記憶體快取)
 # ==========================================
 async def process_image_identification(image_bytes, user_id):
-    """動態從 Firestore 抓取白名單與知識庫，進行視覺辨識與導覽生成"""
-    db = get_db()
+    """從數位典藏站抓取地點資料，進行視覺辨識與導覽生成"""
     image_hash = hashlib.sha256(image_bytes).hexdigest()
-    
-    whitelist_places = []
+
     try:
-        docs = db.collection("KnowledgeDB").stream()
-        whitelist_places = [doc.id for doc in docs]
+        async with httpx.AsyncClient(timeout=10) as client:
+            archive_response = await client.get(ARCHIVE_LOCATIONS_URL)
+            archive_response.raise_for_status()
+        locations = archive_response.json().get("locations", [])
+        knowledge_by_place = {
+            str(location.get("title", "")).strip(): location
+            for location in locations
+            if str(location.get("title", "")).strip()
+        }
+        if not knowledge_by_place:
+            raise ValueError("數位典藏站沒有可用地點")
     except Exception as e:
-        print("抓取白名單失敗:", e)
-        whitelist_places = ["虎尾驛", "虎尾糖廠", "虎尾鐵橋", "雲林布袋戲館", "雲林故事館"]
+        print("抓取數位典藏站資料失敗:", e)
+        ai_response_text = "目前無法讀取數位典藏資料，請稍後再試。"
+        set_user_cache(user_id, ai_response_text)
+        return {"aiResponse": ai_response_text, "locationName": "", "hash": image_hash}
+
+    whitelist_places = list(knowledge_by_place)
     whitelist_places.sort(key=len, reverse=True)
     places_str = "\n    - ".join(whitelist_places) if whitelist_places else "無可用白名單"
 
@@ -413,7 +425,7 @@ async def process_image_identification(image_bytes, user_id):
 
     if best_place == "未知地點":
         observation = visual_text.replace("鑑定結果：未知地點", "").strip()
-        ai_response_text = f"哎呀，我判斷不出來這是哪裡，或者該景點的「資料庫尚未建立」哦！\n\n🔍 導遊的觀察筆記：\n{observation}"
+        ai_response_text = f"哎呀，我判斷不出來這是哪裡，或者該景點尚未收錄在數位典藏站哦！\n\n🔍 導遊的觀察筆記：\n{observation}"
         
         # ⚡ 存入口袋
         set_user_cache(user_id, ai_response_text)
@@ -426,20 +438,10 @@ async def process_image_identification(image_bytes, user_id):
             "needsConfirmation": True
         }
 
-    local_knowledge = "這是一個承載著在地記憶的獨特空間，非常值得前來細細品味。"
-    try:
-        doc_ref = db.collection("KnowledgeDB").document(best_place)
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict()
-            context = data.get("context", "")
-            speaker = data.get("speaker", "")
-            category = data.get("category", "")
-            local_knowledge = f"【類別】：{category}\n【詳細背景】：\n{context}"
-            if speaker:
-                local_knowledge += f"\n【資料來源/與談人】：{speaker}"
-    except Exception as e:
-        print(f"讀取 {best_place} 知識庫失敗:", e)
+    location = knowledge_by_place[best_place]
+    category = location.get("category", "")
+    summary = location.get("summary", "")
+    local_knowledge = f"【類別】：{category}\n【典藏摘要】：\n{summary}"
 
     intro_prompt = f"""你是一個專業、熱情的在地導遊。請根據以下關於「{best_place}」的歷史背景知識，為遊客寫一段生動、引人入勝的景點導覽介紹。
     
