@@ -1,6 +1,8 @@
 .env
 huwei agent.json
+credentials/
 venv/
+.venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
