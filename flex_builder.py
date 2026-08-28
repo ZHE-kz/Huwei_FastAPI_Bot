@@ -1,6 +1,5 @@
 import urllib.parse
 from typing import Dict, Any, List
-from maps import build_itinerary_google_map_url
 from config import PRIMARY_COLOR
 
 # 🌟 新增：圖片專屬快取口袋 (Cloud Run 溫啟動時完美發揮作用)
@@ -82,7 +81,7 @@ def create_simple_location_flex(parsed_json: Dict[str, Any], weather: str, db_da
 def create_itinerary_flex(db, json_data: Dict[str, Any], itinerary_id: str, weather_summary: str) -> Dict[str, Any]:
     primary_color = PRIMARY_COLOR
     stops_data: List[dict] = json_data.get("stops") or []
-    map_url = build_itinerary_google_map_url(stops_data)
+    map_url = f"https://linebot.zheforge.com/maps/route/{itinerary_id}"
 
     stops_elements: List[dict] = []
     for index, stop in enumerate(stops_data):

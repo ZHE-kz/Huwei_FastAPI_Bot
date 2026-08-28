@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from config import PUZZLE_ADMIN_SECRET
 from firestore_client import get_db
 from puzzle_core import PUZZLE_COLLECTION, force_clear_puzzle_cache, load_puzzle_config, normalize_stage
+from prompt_store import list_prompts, save_prompt
 
 router = APIRouter(prefix="/admin/puzzles")
 IMPORT_COLUMNS = [
@@ -71,6 +72,10 @@ class PuzzleStage(BaseModel):
     success_text: str
     next_stage_id: str = ""
     requires_image: bool = False
+
+
+class PromptUpdate(BaseModel):
+    content: str
 
 
 def parse_bool(value):
@@ -235,20 +240,40 @@ async def update_stage(stage_id: str, stage: PuzzleStage):
     return {"ok": True, "stage": data}
 
 
+@router.get("/api/prompts", dependencies=[Depends(require_access)])
+async def get_prompts():
+    return {"prompts": list_prompts()}
+
+
+@router.put("/api/prompts/{prompt_id}", dependencies=[Depends(require_access)])
+async def update_prompt(prompt_id: str, prompt: PromptUpdate):
+    try:
+        save_prompt(prompt_id, prompt.content)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    except Exception as error:
+        raise HTTPException(503, f"無法儲存 Prompt：{error}") from error
+    return {"ok": True}
+
+
 ADMIN_HTML = """<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>解謎題庫管理</title><style>
 body{font:16px system-ui;max-width:980px;margin:auto;padding:24px;background:#f5f7f5;color:#18311f}h1{margin-top:0}
 section{background:white;padding:20px;margin:16px 0;border-radius:12px;box-shadow:0 2px 12px #0001}label{display:block;margin:10px 0 4px}
-input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #b8c7bb;border-radius:7px}textarea{min-height:76px}button,.button{display:inline-block;margin-top:14px;padding:10px 16px;border:0;border-radius:7px;background:#1d7a3b;color:white;cursor:pointer;text-decoration:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stage{border-top:1px solid #ddd;padding:12px 0}.muted{color:#607067}.status{margin-left:10px}@media(max-width:650px){.grid{grid-template-columns:1fr}}
+input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #b8c7bb;border-radius:7px}textarea{min-height:76px}.prompt textarea{min-height:260px;font:14px ui-monospace,monospace}.prompt{border-top:1px solid #ddd;padding:12px 0}button,.button{display:inline-block;margin-top:14px;padding:10px 16px;border:0;border-radius:7px;background:#1d7a3b;color:white;cursor:pointer;text-decoration:none}.tabs{display:flex;gap:8px;margin:20px 0}.tabs button{margin:0;background:#dce7df;color:#18311f}.tabs button.active{background:#1d7a3b;color:white}.panel[hidden]{display:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stage{border-top:1px solid #ddd;padding:12px 0}.muted{color:#607067}.status{margin-left:10px}@media(max-width:650px){.grid{grid-template-columns:1fr}}
 </style></head><body><h1>解謎題庫管理</h1><p class="muted">使用者輸入啟動指令後，從起始關卡開始。修改會直接寫入 Firestore。</p>
-<section><h2>遊戲設定</h2><form id="settings"><div class="grid"><div><label>啟動指令</label><input name="start_command" required></div><div><label>起始關卡</label><input name="start_stage" required></div></div><button>儲存設定</button></form></section>
+<nav class="tabs"><button type="button" class="active" data-panel="puzzle-panel">解謎題庫</button><button type="button" data-panel="prompt-panel">AI Prompt</button></nav>
+<div id="puzzle-panel" class="panel"><section><h2>遊戲設定</h2><form id="settings"><div class="grid"><div><label>啟動指令</label><input name="start_command" required></div><div><label>起始關卡</label><input name="start_stage" required></div></div><button>儲存設定</button></form></section>
 <section><h2>試算表匯入</h2><p class="muted">支援 CSV、XLSX，最多 5 MB／200 題。同 ID 關卡會覆寫，其他既有關卡不刪除。</p><form id="upload"><input type="file" name="file" accept=".csv,.xlsx" required><button>上傳並匯入</button><span id="upload-status" class="status"></span></form><a class="button" href="/admin/puzzles/template.csv">下載 CSV 範本</a></section>
 <section><h2>新增／修改關卡</h2><form id="stage"><div class="grid"><div><label>關卡 ID</label><input name="stage_id" placeholder="STAGE_01" required></div><div><label>下一關 ID</label><input name="next_stage_id"></div></div><label>開場文字</label><textarea name="agent_intro" required></textarea><label>圖片辨識目標</label><textarea name="vision_target"></textarea><label><input style="width:auto" type="checkbox" name="requires_image"> 此關需要先上傳照片</label><label>題目／提示</label><textarea name="puzzle_hint" required></textarea><label>正確答案</label><input name="puzzle_answer" required><label>答對訊息</label><textarea name="success_text" required></textarea><button>儲存關卡</button></form></section>
-<section><h2>目前關卡</h2><div id="list"></div></section><script>
-const settings=document.querySelector('#settings'),stage=document.querySelector('#stage'),upload=document.querySelector('#upload'),list=document.querySelector('#list'),uploadStatus=document.querySelector('#upload-status');
+<section><h2>目前關卡</h2><div id="list"></div></section></div>
+<div id="prompt-panel" class="panel" hidden><section><h2>AI Prompt 管理</h2><p class="muted">變數必須保留，格式為 <code>{{variable}}</code>。儲存後最多 5 分鐘內套用到所有 Cloud Run 實例。</p><div id="prompts"></div></section></div>
+<script>const settings=document.querySelector('#settings'),stage=document.querySelector('#stage'),upload=document.querySelector('#upload'),list=document.querySelector('#list'),prompts=document.querySelector('#prompts'),uploadStatus=document.querySelector('#upload-status');
+document.querySelectorAll('.tabs button').forEach(button=>button.onclick=()=>{document.querySelectorAll('.tabs button').forEach(item=>item.classList.toggle('active',item===button));document.querySelectorAll('.panel').forEach(panel=>panel.hidden=panel.id!==button.dataset.panel)});
 async function api(path='',options={}){const headers=options.body instanceof FormData?{}:{'Content-Type':'application/json'};const r=await fetch('/admin/puzzles/api'+path,{...options,headers:{...headers,...options.headers}});if(!r.ok)throw new Error(await r.text());return r.json()}
-async function load(){const data=await api();settings.start_command.value=data.settings.start_command;settings.start_stage.value=data.settings.start_stage;list.replaceChildren(...Object.entries(data.stages).sort().map(([id,s])=>{const row=document.createElement('div');row.className='stage';const title=document.createElement('strong');title.textContent=id+' — '+s.puzzle_hint;const edit=document.createElement('button');edit.textContent='編輯';edit.onclick=()=>fill(id,s);row.append(title,document.createElement('br'),edit);return row}))}
+function renderPrompts(items){prompts.replaceChildren(...items.map(p=>{const form=document.createElement('form');form.className='prompt';const title=document.createElement('h3');title.textContent=p.title;const variables=document.createElement('p');variables.className='muted';variables.textContent='必要變數：'+p.variables.map(name=>'{{'+name+'}}').join('、');const textarea=document.createElement('textarea');textarea.value=p.content;textarea.required=true;textarea.maxLength=20000;const button=document.createElement('button');button.textContent='儲存 Prompt';const status=document.createElement('span');status.className='status';form.append(title,variables,textarea,button,status);form.onsubmit=async e=>{e.preventDefault();status.textContent='儲存中…';try{await api('/prompts/'+encodeURIComponent(p.id),{method:'PUT',body:JSON.stringify({content:textarea.value})});status.textContent='已儲存'}catch(error){status.textContent='儲存失敗：'+error.message}};return form}))}
+async function load(){const [data,promptData]=await Promise.all([api(),api('/prompts')]);settings.start_command.value=data.settings.start_command;settings.start_stage.value=data.settings.start_stage;renderPrompts(promptData.prompts);list.replaceChildren(...Object.entries(data.stages).sort().map(([id,s])=>{const row=document.createElement('div');row.className='stage';const title=document.createElement('strong');title.textContent=id+' — '+s.puzzle_hint;const edit=document.createElement('button');edit.textContent='編輯';edit.onclick=()=>fill(id,s);row.append(title,document.createElement('br'),edit);return row}))}
 function fill(id,s){stage.stage_id.value=id;for(const [key,value] of Object.entries(s)){if(stage[key])stage[key].type==='checkbox'?stage[key].checked=value:stage[key].value=value??''}stage.scrollIntoView({behavior:'smooth'})}
 settings.onsubmit=async e=>{e.preventDefault();await api('/settings',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(settings)))});alert('設定已儲存')};
 upload.onsubmit=async e=>{e.preventDefault();uploadStatus.textContent='匯入中…';try{const result=await api('/import',{method:'POST',body:new FormData(upload)});uploadStatus.textContent='已匯入 '+result.imported+' 題';upload.reset();await load()}catch(error){uploadStatus.textContent='匯入失敗：'+error.message}};

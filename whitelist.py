@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
 from typing import List
-from firestore_client import get_db
+import httpx
+
+
+ARCHIVE_LOCATIONS_URL = "https://nfu-digital-archive.zheforge.com/api/locations"
 
 # 預設白名單快取 (包含失效時間)[cite: 7]
 _whitelist_cache = {
@@ -9,7 +12,7 @@ _whitelist_cache = {
 }
 
 def fetch_whitelist_sync() -> str:
-    """從 ItineraryDB 抓取白名單並更新快取"""
+    """從虎尾地方記憶地圖抓取白名單並更新快取"""
     global _whitelist_cache
     now = datetime.now()
 
@@ -19,31 +22,36 @@ def fetch_whitelist_sync() -> str:
         return _whitelist_cache["data"]
 
     try:
-        db = get_db()
-        docs = db.collection("ItineraryDB").stream()
+        response = httpx.get(ARCHIVE_LOCATIONS_URL, timeout=10.0)
+        response.raise_for_status()
+        locations = response.json().get("locations", [])
         items: List[str] = []
-        for doc in docs:
-            data = doc.to_dict() or {}
-            name = data.get("placeName", "未知景點")
-            category = data.get("category", "未分類")
-            duration = data.get("duration", "未知")
-            feature = data.get("feature", "無特色說明")
-            opening = data.get("openingHours", "營業時間未提供")
+        for location in locations:
+            name = str(location.get("title", "")).strip()
+            if not name:
+                continue
+            category = str(location.get("category") or "地方記憶").strip()
+            feature = " ".join(str(location.get("summary") or "地方記憶地圖地點").split())[:300]
+            latitude = location.get("latitude")
+            longitude = location.get("longitude")
+            coordinates = f", 座標: {latitude},{longitude}" if latitude is not None and longitude is not None else ""
             items.append(
-                f"- {name} (類別: {category}, 停留時間: {duration}, 特色: {feature}, 營業時間: {opening})"
+                f"- {name} (類別: {category}, 特色: {feature}{coordinates})"
             )
 
-        result = "\n".join(items) if items else "目前無可用白名單資料"
+        if not items:
+            raise ValueError("虎尾地方記憶地圖沒有可用地點")
+        result = "\n".join(items)
 
         # 更新快取，設定 12 小時過期[cite: 7]
         _whitelist_cache["data"] = result
         _whitelist_cache["expire_time"] = now + timedelta(hours=12)
-        print("☁️ [更新] 已從 Firestore 重新抓取白名單並存入快取")
+        print("☁️ [更新] 已從虎尾地方記憶地圖重新抓取白名單並存入快取")
 
         return result
 
     except Exception as e:
-        print(f"🚨 Firestore 讀取白名單失敗: {e}")
+        print(f"🚨 數位典藏館讀取白名單失敗: {e}")
         # 失敗時回傳舊快取或預設值[cite: 7]
         return _whitelist_cache["data"] 
 

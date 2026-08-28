@@ -8,6 +8,7 @@ import google.generativeai as genai
 import httpx
 
 from firestore_client import get_db
+from prompt_store import render_prompt
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQhKOMFVy6CQusZgXpKZ3rbDjxk0Z3a2Z9tG1MFKJ8hG3jxSUODM6lKDw2x-p1L5dd_SdPMPJOWaeE/pub?gid=531672485&single=true&output=csv"
 PUZZLE_COLLECTION = "PuzzleConfig"
@@ -133,10 +134,7 @@ async def process_puzzle_event(
     if game_status == "WAITING_IMAGE" and image_base64:
         genai.configure(api_key=gemini_key)
         model = genai.GenerativeModel("gemini-2.5-flash")
-        prompt = (
-            f"請檢查照片是否符合目標：{stage['vision_target']}。"
-            "符合只回答「辨識成功」；不符合請簡述原因。請嚴格判斷。"
-        )
+        prompt = render_prompt("puzzle_image", vision_target=stage["vision_target"])
         try:
             response = await model.generate_content_async(
                 [prompt, {"mime_type": "image/jpeg", "data": base64.b64decode(image_base64)}]

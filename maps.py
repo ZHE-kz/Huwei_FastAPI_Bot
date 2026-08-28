@@ -25,10 +25,10 @@ def build_itinerary_google_map_url(stops: List[Dict]) -> str:
         if lat is not None and lng is not None:
             valid_stops.append(f"{lat},{lng}")
         else:
-            name = (stop.get("location") or "").strip()
+            name = (stop.get("location") or "").strip()[:20]
             if name:
                 # 🌟 加上地域限制，確保不會導航到外縣市或國外
-                safe_name = name if "虎尾" in name else f"台灣雲林縣虎尾鎮 {name}"
+                safe_name = name if "虎尾" in name else f"虎尾 {name}"
                 valid_stops.append(safe_name)
 
     if len(valid_stops) == 0:

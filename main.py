@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
+from fastapi.responses import RedirectResponse
 import httpx
 from datetime import datetime
 from admin_tools import router as puzzle_admin_router
@@ -10,6 +11,7 @@ from config import CWA_API_KEY, GEMINI_API_KEY, LINE_ACCESS_TOKEN, LINE_CHANNEL_
 from itinerary_processor import process_image_identification, process_itinerary
 from puzzle_core import process_puzzle_event, should_route_to_puzzle
 from firestore_client import get_db
+from maps import build_itinerary_google_map_url
 
 app = FastAPI()
 app.include_router(puzzle_admin_router)
@@ -176,6 +178,22 @@ async def background_task_router(payload: dict):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/maps/route/{itinerary_id}")
+async def itinerary_maps_route(itinerary_id: str):
+    if len(itinerary_id) != 20 or not itinerary_id.isalnum():
+        raise HTTPException(status_code=404, detail="Itinerary not found")
+
+    document = get_db().collection("ItineraryHistory").document(itinerary_id).get()
+    if not document.exists:
+        raise HTTPException(status_code=404, detail="Itinerary not found")
+
+    stops = (document.to_dict().get("full_itinerary") or {}).get("stops") or []
+    if not stops:
+        raise HTTPException(status_code=404, detail="Itinerary has no stops")
+
+    return RedirectResponse(build_itinerary_google_map_url(stops))
 
 
 @app.post("/")

@@ -18,6 +18,7 @@ from whitelist import fetch_whitelist_sync, force_clear_whitelist_cache
 from ai_client import configure_gemini, generate_itinerary_async
 from flex_builder import create_itinerary_flex, create_simple_location_flex
 from config import PROMOTE_TO_DB_THRESHOLD
+from prompt_store import render_prompt
 
 # 🌟 全域宣告模型
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -225,29 +226,14 @@ async def process_itinerary(
             history_context += f"- Title: {title}\n  Stops: {json.dumps(stops, ensure_ascii=False)}\n"
 
     # 🧠 三模式 AI 判斷 Prompt
-    prompt = (
-        "[Role] Huwei Tour Guide Agent (Professional, Friendly & Strategic)\n"
-        f"{history_context}"
-        "[Crucial Context]\n"
-        f"- Current Time: {current_time} ({current_day})\n"
-        f"- Weather: {weather}\n\n"
-        "[Rules]\n"
-        "1. WHITELIST ONLY: For itineraries or locations, you must ONLY use places provided in the [Whitelist Database].\n"
-        "2. INTENT DETECTION:\n"
-        "   - If user is just greeting, chatting, or asking casual questions (e.g., '你好', '早安', '你是誰'), choose CHAT and reply warmly in traditional Chinese.\n"
-        "   - If user asks for a trip, route, or multiple places, choose ITINERARY.\n"
-        "   - If user asks for a single place recommendation, choose LOCATION.\n"
-        "3. Output raw JSON only.\n\n"
-        f"[Query] {user_text}\n"
-        f"[Whitelist Database]\n{whitelist}\n"
-        "[Format]\n"
-        "You MUST strictly output ONE of the following JSON structures based on intent:\n\n"
-        "IF CHAT:\n"
-        '{"type":"chat","text":"[Your friendly conversational response]"}\n\n'
-        "IF ITINERARY:\n"
-        '{"type":"itinerary","title":"...","total_distance":"...","stops":[{"time":"HH:MM","location":"...","note":"..."}]}\n\n'
-        "IF LOCATION:\n"
-        '{"type":"location","name":"[Place Name]","category":"...","time":"[Opening hours]","description":"[A rich, friendly description]"}'
+    prompt = render_prompt(
+        "itinerary",
+        history_context=history_context,
+        current_time=current_time,
+        current_day=current_day,
+        weather=weather,
+        user_text=user_text,
+        whitelist=whitelist,
     )
 
     configure_gemini(gemini_key)
@@ -397,18 +383,8 @@ async def process_image_identification(image_bytes, user_id):
     whitelist_places.sort(key=len, reverse=True)
     places_str = "\n    - ".join(whitelist_places) if whitelist_places else "無可用白名單"
 
-    prompt = f"""請仔細觀察這張圖片中的建築、招牌、街景、文字與空間特徵。
-    
-    我們有一個「專屬景點白名單」：
-    - {places_str}
-    
-    請你扮演極度嚴格的鑑定官：
-    1. 判斷這張照片是否明確屬於上述白名單中的「某一個地點」。
-    2. 如果非常確定，請在第一行直接且只能輸出：「鑑定結果：[地點名稱]」。
-    3. 如果只是普通街景、特徵不足、或不在白名單內，請在第一行輸出：「鑑定結果：未知地點」。
-    4. 第二行開始，請用繁體中文詳細描述你看到了什麼特徵，以及你的判斷依據。
-    """
-    
+    prompt = render_prompt("image_identification", places_str=places_str)
+
     response = model.generate_content([
         prompt,
         {"mime_type": "image/jpeg", "data": image_bytes}
@@ -450,16 +426,12 @@ async def process_image_identification(image_bytes, user_id):
         f"【正文】：{content}"
     )
 
-    intro_prompt = f"""你是一個專業、熱情的在地導遊。請根據以下關於「{best_place}」的歷史背景知識，為遊客寫一段生動、引人入勝的景點導覽介紹。
-    
-    ⚠️【最高限制原則】：
-    1. 輸出的文字一定要精簡洗鍊，且內容要盡可能地還原資料庫的內容不要加過多的修飾
-    2. 語氣要文青、親切，充滿故事感，讓人一聽就想深入探索。
-    
-    【景點背景知識】：
-    {local_knowledge}
-    """
-    
+    intro_prompt = render_prompt(
+        "history_intro",
+        best_place=best_place,
+        local_knowledge=local_knowledge,
+    )
+
     intro_response = model.generate_content(intro_prompt)
     
     easter_egg_plot = ""
