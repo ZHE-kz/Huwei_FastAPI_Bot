@@ -47,6 +47,24 @@ curl http://127.0.0.1:8000/health
 
 任何電腦都只同步 Git 追蹤的檔案；`.env`、Google 憑證、尚未 commit 的修改不會自動帶過去。
 
+## 非同步共編
+
+每個人從最新 `main` 建立自己的分支，透過 Pull Request 合併；PR 會自動執行 Python 語法檢查，合併到 `main` 後才部署。
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c codex/功能名稱
+# 修改並測試
+git add <本次檔案>
+git commit -m "修改說明"
+git push -u origin codex/功能名稱
+```
+
+到 GitHub 建立 Pull Request，測試通過並合併後，其他電腦執行 `git pull --ff-only` 取得更新。
+
+管理網站的「更新日誌」分頁可輸入版本、標題及內容；建立時會自動加入時間並儲存至 Firestore `UpdateLogs`。
+
 ## 主要檔案
 
 - `main.py`：FastAPI 入口、LINE webhook、健康檢查。
