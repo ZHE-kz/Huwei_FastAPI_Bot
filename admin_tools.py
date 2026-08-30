@@ -4,12 +4,14 @@ import hashlib
 import hmac
 import io
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from google.api_core.exceptions import AlreadyExists
 from google.cloud.firestore_v1 import Query
 from openpyxl import load_workbook
 from pydantic import BaseModel
@@ -85,6 +87,41 @@ class ChangelogEntry(BaseModel):
     title: str
     summary: str
     version: str = ""
+
+
+def changelog_data(entry):
+    data = {
+        "title": entry.title.strip(),
+        "summary": entry.summary.strip(),
+        "version": entry.version.strip(),
+    }
+    if not data["title"] or not data["summary"]:
+        raise HTTPException(400, "標題與更新內容不可空白")
+    if len(data["title"]) > 100 or len(data["summary"]) > 5000 or len(data["version"]) > 30:
+        raise HTTPException(400, "輸入內容過長")
+    return data
+
+
+def record_deployment_changelog():
+    commit_sha = os.environ.get("DEPLOY_COMMIT_SHA", "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+        return False
+    try:
+        title = base64.b64decode(os.environ.get("DEPLOY_COMMIT_TITLE_B64", "")).decode().strip()
+    except (ValueError, UnicodeDecodeError):
+        title = ""
+    data = {
+        "title": (title.splitlines()[0] if title else "自動部署")[:100],
+        "summary": f"GitHub main 更新已自動部署。\nCommit: {commit_sha}",
+        "version": commit_sha[:7],
+        "source": "deployment",
+        "created_at": datetime.now(timezone.utc),
+    }
+    try:
+        get_db().collection(CHANGELOG_COLLECTION).document(f"deploy-{commit_sha}").create(data)
+        return True
+    except AlreadyExists:
+        return False
 
 
 def parse_bool(value):
@@ -283,19 +320,21 @@ async def get_changelog():
 
 @router.post("/api/changelog", dependencies=[Depends(require_access)])
 async def create_changelog(entry: ChangelogEntry):
-    data = {
-        "title": entry.title.strip(),
-        "summary": entry.summary.strip(),
-        "version": entry.version.strip(),
-        "created_at": datetime.now(timezone.utc),
-    }
-    if not data["title"] or not data["summary"]:
-        raise HTTPException(400, "標題與更新內容不可空白")
-    if len(data["title"]) > 100 or len(data["summary"]) > 5000 or len(data["version"]) > 30:
-        raise HTTPException(400, "輸入內容過長")
+    data = {**changelog_data(entry), "source": "manual", "created_at": datetime.now(timezone.utc)}
     document = get_db().collection(CHANGELOG_COLLECTION).document()
     document.set(data)
     return {"ok": True, "entry": {"id": document.id, **data, "created_at": data["created_at"].isoformat()}}
+
+
+@router.put("/api/changelog/{entry_id}", dependencies=[Depends(require_access)])
+async def update_changelog(entry_id: str, entry: ChangelogEntry):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", entry_id):
+        raise HTTPException(400, "更新日誌 ID 格式錯誤")
+    document = get_db().collection(CHANGELOG_COLLECTION).document(entry_id)
+    if not document.get().exists:
+        raise HTTPException(404, "找不到更新日誌")
+    document.update({**changelog_data(entry), "updated_at": datetime.now(timezone.utc)})
+    return {"ok": True}
 
 
 ADMIN_HTML = """<!doctype html>
@@ -311,17 +350,20 @@ input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #b
 <section><h2>新增／修改關卡</h2><form id="stage"><div class="grid"><div><label>關卡 ID</label><input name="stage_id" placeholder="STAGE_01" required></div><div><label>下一關 ID</label><input name="next_stage_id"></div></div><label>開場文字</label><textarea name="agent_intro" required></textarea><label>圖片辨識目標</label><textarea name="vision_target"></textarea><label><input style="width:auto" type="checkbox" name="requires_image"> 此關需要先上傳照片</label><label>題目／提示</label><textarea name="puzzle_hint" required></textarea><label>正確答案</label><input name="puzzle_answer" required><label>答對訊息</label><textarea name="success_text" required></textarea><button>儲存關卡</button></form></section>
 <section><h2>目前關卡</h2><div id="list"></div></section></div>
 <div id="prompt-panel" class="panel" hidden><section><h2>AI Prompt 管理</h2><p class="muted">變數必須保留，格式為 <code>{{variable}}</code>。儲存後最多 5 分鐘內套用到所有 Cloud Run 實例。</p><div id="prompts"></div></section></div>
-<div id="changelog-panel" class="panel" hidden><section><h2>建立更新日誌</h2><form id="changelog-form"><div class="grid"><div><label>版本（選填）</label><input name="version" maxlength="30" placeholder="v1.2.0"></div><div><label>標題</label><input name="title" maxlength="100" required></div></div><label>更新內容</label><textarea name="summary" maxlength="5000" required></textarea><button>建立日誌</button><span id="changelog-status" class="status"></span></form></section><section><h2>最近更新</h2><div id="changelog-list"></div></section></div>
-<script>const settings=document.querySelector('#settings'),stage=document.querySelector('#stage'),upload=document.querySelector('#upload'),list=document.querySelector('#list'),prompts=document.querySelector('#prompts'),changelogForm=document.querySelector('#changelog-form'),changelogList=document.querySelector('#changelog-list'),changelogStatus=document.querySelector('#changelog-status'),uploadStatus=document.querySelector('#upload-status');
+<div id="changelog-panel" class="panel" hidden><section><h2>建立／修改更新日誌</h2><p class="muted">部署成功時會自動建立；也可以在這裡手動新增或修改。</p><form id="changelog-form"><div class="grid"><div><label>版本（選填）</label><input name="version" maxlength="30" placeholder="v1.2.0"></div><div><label>標題</label><input name="title" maxlength="100" required></div></div><label>更新內容</label><textarea name="summary" maxlength="5000" required></textarea><button id="changelog-submit">建立日誌</button><button id="changelog-cancel" type="button" hidden>取消修改</button><span id="changelog-status" class="status"></span></form></section><section><h2>最近更新</h2><div id="changelog-list"></div></section></div>
+<script>const settings=document.querySelector('#settings'),stage=document.querySelector('#stage'),upload=document.querySelector('#upload'),list=document.querySelector('#list'),prompts=document.querySelector('#prompts'),changelogForm=document.querySelector('#changelog-form'),changelogList=document.querySelector('#changelog-list'),changelogSubmit=document.querySelector('#changelog-submit'),changelogCancel=document.querySelector('#changelog-cancel'),changelogStatus=document.querySelector('#changelog-status'),uploadStatus=document.querySelector('#upload-status');
 document.querySelectorAll('.tabs button').forEach(button=>button.onclick=()=>{document.querySelectorAll('.tabs button').forEach(item=>item.classList.toggle('active',item===button));document.querySelectorAll('.panel').forEach(panel=>panel.hidden=panel.id!==button.dataset.panel)});
 async function api(path='',options={}){const headers=options.body instanceof FormData?{}:{'Content-Type':'application/json'};const r=await fetch('/admin/puzzles/api'+path,{...options,headers:{...headers,...options.headers}});if(!r.ok)throw new Error(await r.text());return r.json()}
 function renderPrompts(items){prompts.replaceChildren(...items.map(p=>{const form=document.createElement('form');form.className='prompt';const title=document.createElement('h3');title.textContent=p.title;const variables=document.createElement('p');variables.className='muted';variables.textContent='必要變數：'+p.variables.map(name=>'{{'+name+'}}').join('、');const textarea=document.createElement('textarea');textarea.value=p.content;textarea.required=true;textarea.maxLength=20000;const button=document.createElement('button');button.textContent='儲存 Prompt';const status=document.createElement('span');status.className='status';form.append(title,variables,textarea,button,status);form.onsubmit=async e=>{e.preventDefault();status.textContent='儲存中…';try{await api('/prompts/'+encodeURIComponent(p.id),{method:'PUT',body:JSON.stringify({content:textarea.value})});status.textContent='已儲存'}catch(error){status.textContent='儲存失敗：'+error.message}};return form}))}
-function renderChangelog(items){changelogList.replaceChildren(...items.map(item=>{const row=document.createElement('article');row.className='log';const title=document.createElement('h3');title.textContent=(item.version?item.version+' — ':'')+item.title;const timestamp=document.createElement('time');timestamp.className='muted';timestamp.textContent=new Date(item.created_at).toLocaleString('zh-TW');const summary=document.createElement('p');summary.textContent=item.summary;row.append(title,timestamp,summary);return row}))}
+function resetChangelog(){changelogForm.reset();delete changelogForm.dataset.id;changelogSubmit.textContent='建立日誌';changelogCancel.hidden=true}
+function editChangelog(item){changelogForm.elements.namedItem('version').value=item.version||'';changelogForm.elements.namedItem('title').value=item.title;changelogForm.elements.namedItem('summary').value=item.summary;changelogForm.dataset.id=item.id;changelogSubmit.textContent='儲存修改';changelogCancel.hidden=false;changelogForm.scrollIntoView({behavior:'smooth'})}
+function renderChangelog(items){changelogList.replaceChildren(...items.map(item=>{const row=document.createElement('article');row.className='log';const title=document.createElement('h3');title.textContent=(item.source==='deployment'?'自動｜':'')+(item.version?item.version+' — ':'')+item.title;const timestamp=document.createElement('time');timestamp.className='muted';timestamp.textContent=new Date(item.created_at).toLocaleString('zh-TW');const summary=document.createElement('p');summary.textContent=item.summary;const edit=document.createElement('button');edit.type='button';edit.textContent='修改';edit.onclick=()=>editChangelog(item);row.append(title,timestamp,summary,edit);return row}))}
 async function load(){const [data,promptData,changelogData]=await Promise.all([api(),api('/prompts'),api('/changelog')]);settings.start_command.value=data.settings.start_command;settings.start_stage.value=data.settings.start_stage;renderPrompts(promptData.prompts);renderChangelog(changelogData.entries);list.replaceChildren(...Object.entries(data.stages).sort().map(([id,s])=>{const row=document.createElement('div');row.className='stage';const title=document.createElement('strong');title.textContent=id+' — '+s.puzzle_hint;const edit=document.createElement('button');edit.textContent='編輯';edit.onclick=()=>fill(id,s);row.append(title,document.createElement('br'),edit);return row}))}
 function fill(id,s){stage.stage_id.value=id;for(const [key,value] of Object.entries(s)){if(stage[key])stage[key].type==='checkbox'?stage[key].checked=value:stage[key].value=value??''}stage.scrollIntoView({behavior:'smooth'})}
 settings.onsubmit=async e=>{e.preventDefault();await api('/settings',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(settings)))});alert('設定已儲存')};
 upload.onsubmit=async e=>{e.preventDefault();uploadStatus.textContent='匯入中…';try{const result=await api('/import',{method:'POST',body:new FormData(upload)});uploadStatus.textContent='已匯入 '+result.imported+' 題';upload.reset();await load()}catch(error){uploadStatus.textContent='匯入失敗：'+error.message}};
 stage.onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(stage));const id=data.stage_id;delete data.stage_id;data.requires_image=stage.requires_image.checked;await api('/stages/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify(data)});alert('關卡已儲存');await load()};
-changelogForm.onsubmit=async e=>{e.preventDefault();changelogStatus.textContent='建立中…';try{const data=Object.fromEntries(new FormData(changelogForm));await api('/changelog',{method:'POST',body:JSON.stringify(data)});changelogForm.reset();changelogStatus.textContent='已建立';const current=await api('/changelog');renderChangelog(current.entries)}catch(error){changelogStatus.textContent='建立失敗：'+error.message}};
+changelogCancel.onclick=()=>{resetChangelog();changelogStatus.textContent=''};
+changelogForm.onsubmit=async e=>{e.preventDefault();const id=changelogForm.dataset.id;changelogStatus.textContent=id?'儲存中…':'建立中…';try{const data=Object.fromEntries(new FormData(changelogForm));await api('/changelog'+(id?'/'+encodeURIComponent(id):''),{method:id?'PUT':'POST',body:JSON.stringify(data)});resetChangelog();changelogStatus.textContent=id?'已修改':'已建立';const current=await api('/changelog');renderChangelog(current.entries)}catch(error){changelogStatus.textContent='操作失敗：'+error.message}};
 load();
 </script></body></html>"""

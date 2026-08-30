@@ -2,18 +2,28 @@ import base64
 import hashlib
 import hmac
 import json
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import RedirectResponse
 import httpx
 from datetime import datetime
-from admin_tools import router as puzzle_admin_router
+from admin_tools import record_deployment_changelog, router as puzzle_admin_router
 from config import CWA_API_KEY, GEMINI_API_KEY, LINE_ACCESS_TOKEN, LINE_CHANNEL_SECRET
 from itinerary_processor import process_image_identification, process_itinerary
 from puzzle_core import process_puzzle_event, should_route_to_puzzle
 from firestore_client import get_db
 from maps import build_itinerary_google_map_url
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_app):
+    try:
+        record_deployment_changelog()
+    except Exception as error:
+        print(f"[CHANGELOG] 自動建立部署日誌失敗: {error}")
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 app.include_router(puzzle_admin_router)
 
 missing_env = [

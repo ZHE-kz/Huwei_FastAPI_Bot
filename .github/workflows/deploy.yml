@@ -32,6 +32,7 @@ jobs:
       - name: Deploy Cloud Run
         shell: bash
         run: |
+          COMMIT_TITLE_B64="$(git log -1 --pretty=%s | base64 -w 0)"
           gcloud run deploy "$CLOUD_RUN_SERVICE" \
             --project "$GCP_PROJECT_ID" \
             --region "$GCP_REGION" \
@@ -41,5 +42,6 @@ jobs:
             --build-service-account "$CLOUD_RUN_BUILD_SERVICE_ACCOUNT" \
             --no-cpu-throttling \
             --timeout 300 \
+            --set-env-vars "DEPLOY_COMMIT_SHA=$GITHUB_SHA,DEPLOY_COMMIT_TITLE_B64=$COMMIT_TITLE_B64" \
             --set-secrets "LINE_ACCESS_TOKEN=LINE_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,CWA_API_KEY=CWA_API_KEY:latest,GOOGLE_DRIVE_FOLDER_ID=GOOGLE_DRIVE_FOLDER_ID:latest,ADMIN_TOKEN=ADMIN_TOKEN:latest,PUZZLE_ADMIN_SECRET=PUZZLE_ADMIN_SECRET:latest" \
             --quiet
