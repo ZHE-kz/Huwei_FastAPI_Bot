@@ -63,7 +63,7 @@ git push -u origin codex/功能名稱
 
 到 GitHub 建立 Pull Request，測試通過並合併後，其他電腦執行 `git pull --ff-only` 取得更新。
 
-每次 GitHub Actions 成功部署後，Cloud Run 會依 commit SHA 自動且不重複地寫入 Firestore `UpdateLogs`。管理網站的「更新日誌」分頁仍可手動新增與修改版本、標題及內容。
+每次 GitHub Actions 成功部署後，Cloud Run 會依 commit SHA 自動且不重複地寫入 Firestore `UpdateLogs`，並以這次 push 的 commit 訊息條列更新摘要。管理網站的「更新日誌」分頁仍可手動新增與修改版本、標題及內容。
 
 ## 主要檔案
 

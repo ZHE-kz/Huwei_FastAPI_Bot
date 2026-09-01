@@ -102,17 +102,22 @@ def changelog_data(entry):
     return data
 
 
+def decode_deploy_text(name):
+    try:
+        return base64.b64decode(os.environ.get(name, "")).decode().strip()
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+
 def record_deployment_changelog():
     commit_sha = os.environ.get("DEPLOY_COMMIT_SHA", "").strip()
     if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
         return False
-    try:
-        title = base64.b64decode(os.environ.get("DEPLOY_COMMIT_TITLE_B64", "")).decode().strip()
-    except (ValueError, UnicodeDecodeError):
-        title = ""
+    title = decode_deploy_text("DEPLOY_COMMIT_TITLE_B64")
+    summary = decode_deploy_text("DEPLOY_COMMIT_SUMMARY_B64")
     data = {
         "title": (title.splitlines()[0] if title else "自動部署")[:100],
-        "summary": f"GitHub main 更新已自動部署。\nCommit: {commit_sha}",
+        "summary": (summary or f"- 部署 commit {commit_sha[:7]}")[:5000],
         "version": commit_sha[:7],
         "source": "deployment",
         "created_at": datetime.now(timezone.utc),
