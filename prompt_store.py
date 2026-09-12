@@ -116,7 +116,7 @@ def list_prompts():
     ]
 
 
-def save_prompt(prompt_id, content):
+def save_prompt(prompt_id, content, changelog=None):
     if prompt_id not in PROMPTS:
         raise ValueError("未知的 Prompt ID")
     if not content.strip():
@@ -133,10 +133,20 @@ def save_prompt(prompt_id, content):
     if unknown:
         raise ValueError("包含未知變數：" + ", ".join(sorted(unknown)))
 
-    get_db().collection(PROMPT_COLLECTION).document(prompt_id).set(
-        {"content": content, "updated_at": time.time()}
-    )
+    if get_prompts().get(prompt_id) == content:
+        return False
+
+    database = get_db()
+    prompt_document = database.collection(PROMPT_COLLECTION).document(prompt_id)
+    if changelog:
+        batch = database.batch()
+        batch.set(prompt_document, {"content": content, "updated_at": time.time()})
+        batch.set(database.collection("UpdateLogs").document(), changelog)
+        batch.commit()
+    else:
+        prompt_document.set({"content": content, "updated_at": time.time()})
     force_clear_prompt_cache()
+    return True
 
 
 def render_prompt(prompt_id, **values):

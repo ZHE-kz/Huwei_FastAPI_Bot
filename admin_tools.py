@@ -299,12 +299,22 @@ async def get_prompts():
 @router.put("/api/prompts/{prompt_id}", dependencies=[Depends(require_access)])
 async def update_prompt(prompt_id: str, prompt: PromptUpdate):
     try:
-        save_prompt(prompt_id, prompt.content)
+        changed = save_prompt(
+            prompt_id,
+            prompt.content,
+            changelog={
+                "title": f"更新 AI Prompt：{prompt_id}",
+                "summary": f"已修改網站後台的 {prompt_id} Prompt（{len(prompt.content)} 字）。",
+                "version": "",
+                "source": "prompt",
+                "created_at": datetime.now(timezone.utc),
+            },
+        )
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     except Exception as error:
         raise HTTPException(503, f"無法儲存 Prompt：{error}") from error
-    return {"ok": True}
+    return {"ok": True, "changed": changed}
 
 
 @router.get("/api/changelog", dependencies=[Depends(require_access)])
@@ -359,7 +369,7 @@ input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #b
 <script>const settings=document.querySelector('#settings'),stage=document.querySelector('#stage'),upload=document.querySelector('#upload'),list=document.querySelector('#list'),prompts=document.querySelector('#prompts'),changelogForm=document.querySelector('#changelog-form'),changelogList=document.querySelector('#changelog-list'),changelogSubmit=document.querySelector('#changelog-submit'),changelogCancel=document.querySelector('#changelog-cancel'),changelogStatus=document.querySelector('#changelog-status'),uploadStatus=document.querySelector('#upload-status');
 document.querySelectorAll('.tabs button').forEach(button=>button.onclick=()=>{document.querySelectorAll('.tabs button').forEach(item=>item.classList.toggle('active',item===button));document.querySelectorAll('.panel').forEach(panel=>panel.hidden=panel.id!==button.dataset.panel)});
 async function api(path='',options={}){const headers=options.body instanceof FormData?{}:{'Content-Type':'application/json'};const r=await fetch('/admin/puzzles/api'+path,{...options,headers:{...headers,...options.headers}});if(!r.ok)throw new Error(await r.text());return r.json()}
-function renderPrompts(items){prompts.replaceChildren(...items.map(p=>{const form=document.createElement('form');form.className='prompt';const title=document.createElement('h3');title.textContent=p.title;const variables=document.createElement('p');variables.className='muted';variables.textContent='必要變數：'+p.variables.map(name=>'{{'+name+'}}').join('、');const textarea=document.createElement('textarea');textarea.value=p.content;textarea.required=true;textarea.maxLength=20000;const button=document.createElement('button');button.textContent='儲存 Prompt';const status=document.createElement('span');status.className='status';form.append(title,variables,textarea,button,status);form.onsubmit=async e=>{e.preventDefault();status.textContent='儲存中…';try{await api('/prompts/'+encodeURIComponent(p.id),{method:'PUT',body:JSON.stringify({content:textarea.value})});status.textContent='已儲存'}catch(error){status.textContent='儲存失敗：'+error.message}};return form}))}
+function renderPrompts(items){prompts.replaceChildren(...items.map(p=>{const form=document.createElement('form');form.className='prompt';const title=document.createElement('h3');title.textContent=p.title;const variables=document.createElement('p');variables.className='muted';variables.textContent='必要變數：'+p.variables.map(name=>'{{'+name+'}}').join('、');const textarea=document.createElement('textarea');textarea.value=p.content;textarea.required=true;textarea.maxLength=20000;const button=document.createElement('button');button.textContent='儲存 Prompt';const status=document.createElement('span');status.className='status';form.append(title,variables,textarea,button,status);form.onsubmit=async e=>{e.preventDefault();status.textContent='儲存中…';try{const result=await api('/prompts/'+encodeURIComponent(p.id),{method:'PUT',body:JSON.stringify({content:textarea.value})});status.textContent=result.changed?'已儲存並記錄更新日誌':'內容未變更';if(result.changed){const current=await api('/changelog');renderChangelog(current.entries)}}catch(error){status.textContent='儲存失敗：'+error.message}};return form}))}
 function resetChangelog(){changelogForm.reset();delete changelogForm.dataset.id;changelogSubmit.textContent='建立日誌';changelogCancel.hidden=true}
 function editChangelog(item){changelogForm.elements.namedItem('version').value=item.version||'';changelogForm.elements.namedItem('title').value=item.title;changelogForm.elements.namedItem('summary').value=item.summary;changelogForm.dataset.id=item.id;changelogSubmit.textContent='儲存修改';changelogCancel.hidden=false;changelogForm.scrollIntoView({behavior:'smooth'})}
 function renderChangelog(items){changelogList.replaceChildren(...items.map(item=>{const row=document.createElement('article');row.className='log';const title=document.createElement('h3');title.textContent=(item.source==='deployment'?'自動｜':'')+(item.version?item.version+' — ':'')+item.title;const timestamp=document.createElement('time');timestamp.className='muted';timestamp.textContent=new Date(item.created_at).toLocaleString('zh-TW');const summary=document.createElement('p');summary.textContent=item.summary;const edit=document.createElement('button');edit.type='button';edit.textContent='修改';edit.onclick=()=>editChangelog(item);row.append(title,timestamp,summary,edit);return row}))}

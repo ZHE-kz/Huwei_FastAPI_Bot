@@ -65,6 +65,8 @@ git push -u origin codex/功能名稱
 
 每次 GitHub Actions 成功部署後，Cloud Run 會依 commit SHA 自動且不重複地寫入 Firestore `UpdateLogs`，並以這次 push 的 commit 訊息條列更新摘要。管理網站的「更新日誌」分頁仍可手動新增與修改版本、標題及內容。
 
+從管理網站儲存 AI Prompt 時，也會以同一個 Firestore batch 自動建立更新日誌；內容未變更時不重複記錄。
+
 ## 主要檔案
 
 - `main.py`：FastAPI 入口、LINE webhook、健康檢查。
