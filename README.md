@@ -77,3 +77,7 @@ git push -u origin codex/功能名稱
 - `DEPLOY.md`：GitHub Actions、Cloud Run、Cloudflare 部署說明。
 
 部署細節請看 [DEPLOY.md](DEPLOY.md)。
+
+## 參與貢獻
+
+任何人都可以 Fork 此專案、建立分支並提出 Pull Request。請先閱讀 [CONTRIBUTING.md](CONTRIBUTING.md)；所有變更需通過自動檢查與維護者審核後才會合併。

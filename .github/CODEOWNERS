@@ -1,0 +1,7 @@
+# 敏感入口與部署設定必須由儲存庫維護者審核。
+/main.py @ZHE-kz
+/config.py @ZHE-kz
+/admin_tools.py @ZHE-kz
+/Dockerfile @ZHE-kz
+/.github/workflows/ @ZHE-kz
+/.github/cloudflare/ @ZHE-kz
