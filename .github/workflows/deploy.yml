@@ -10,11 +10,11 @@ permissions:
   id-token: write
 
 env:
-  GCP_PROJECT_ID: taicu-502512
+  GCP_PROJECT_ID: gen-lang-client-0850797474
   GCP_REGION: asia-east1
   CLOUD_RUN_SERVICE: huwei-fastapi-bot
-  CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT: huwei-bot-runtime@taicu-502512.iam.gserviceaccount.com
-  CLOUD_RUN_BUILD_SERVICE_ACCOUNT: projects/taicu-502512/serviceAccounts/huwei-bot-builder@taicu-502512.iam.gserviceaccount.com
+  CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT: huwei-bot-runtime@gen-lang-client-0850797474.iam.gserviceaccount.com
+  CLOUD_RUN_BUILD_SERVICE_ACCOUNT: projects/gen-lang-client-0850797474/serviceAccounts/huwei-bot-builder@gen-lang-client-0850797474.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -45,6 +45,6 @@ jobs:
             --build-service-account "$CLOUD_RUN_BUILD_SERVICE_ACCOUNT" \
             --no-cpu-throttling \
             --timeout 300 \
-            --set-env-vars "DEPLOY_COMMIT_SHA=$GITHUB_SHA,DEPLOY_COMMIT_TITLE_B64=$COMMIT_TITLE_B64,DEPLOY_COMMIT_SUMMARY_B64=$COMMIT_SUMMARY_B64" \
-            --set-secrets "LINE_ACCESS_TOKEN=LINE_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,CWA_API_KEY=CWA_API_KEY:latest,GOOGLE_DRIVE_FOLDER_ID=GOOGLE_DRIVE_FOLDER_ID:latest,ADMIN_TOKEN=ADMIN_TOKEN:latest,PUZZLE_ADMIN_SECRET=PUZZLE_ADMIN_SECRET:latest" \
+            --set-env-vars "DEPLOY_COMMIT_SHA=$GITHUB_SHA,DEPLOY_COMMIT_TITLE_B64=$COMMIT_TITLE_B64,DEPLOY_COMMIT_SUMMARY_B64=$COMMIT_SUMMARY_B64,PUZZLE_ADMIN_BASE_URL=https://linebot.zheforge.com,PUZZLE_ADMIN_EMAILS=kuizhelin@gmail.com,GOOGLE_CLIENT_ID=142820875824-rcmc64om2pm5k6jcp3u53668b8abef42.apps.googleusercontent.com,GITHUB_CLIENT_ID=Ov23limEsChj1UUD4Uxf" \
+            --set-secrets "LINE_ACCESS_TOKEN=LINE_ACCESS_TOKEN:latest,LINE_CHANNEL_SECRET=LINE_CHANNEL_SECRET:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,CWA_API_KEY=CWA_API_KEY:latest,GOOGLE_DRIVE_FOLDER_ID=GOOGLE_DRIVE_FOLDER_ID:latest,PUZZLE_ADMIN_SECRET=PUZZLE_ADMIN_SECRET:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GITHUB_CLIENT_SECRET=GITHUB_CLIENT_SECRET:latest" \
             --quiet
