@@ -37,6 +37,15 @@ Webhook URL 設為 `https://linebot.zheforge.com/`，啟用 Webhook 後執行 Ve
 
 網址：`https://linebot.zheforge.com/admin/puzzles`
 
+## 謎題後台 OAuth
+
+Cloud Run 需設定 `PUZZLE_ADMIN_BASE_URL`、`PUZZLE_ADMIN_EMAILS`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET`。密鑰請使用 Secret Manager，不要寫入儲存庫。
+
+授權 callback：
+
+- Google：`https://linebot.zheforge.com/admin/puzzles/oauth/google/callback`
+- GitHub：`https://linebot.zheforge.com/admin/puzzles/oauth/github/callback`
+
 帳號：`admin`；密碼讀取本機 `.env` 的 `ADMIN_TOKEN`，題目儲存在 Firestore `PuzzleConfig`。
 
 ### 試算表匯入

@@ -6,9 +6,12 @@ import io
 import json
 import os
 import re
+import secrets
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from google.api_core.exceptions import AlreadyExists
@@ -16,7 +19,15 @@ from google.cloud.firestore_v1 import Query
 from openpyxl import load_workbook
 from pydantic import BaseModel
 
-from config import PUZZLE_ADMIN_SECRET
+from config import (
+    GITHUB_CLIENT_ID,
+    GITHUB_CLIENT_SECRET,
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    PUZZLE_ADMIN_BASE_URL,
+    PUZZLE_ADMIN_EMAILS,
+    PUZZLE_ADMIN_SECRET,
+)
 from firestore_client import get_db
 from puzzle_core import PUZZLE_COLLECTION, force_clear_puzzle_cache, load_puzzle_config, normalize_stage
 from prompt_store import list_prompts, save_prompt
@@ -36,6 +47,8 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_IMPORT_ROWS = 200
 ACCESS_COOKIE = "puzzle_access"
 ACCESS_SECONDS = 60 * 60 * 8
+OAUTH_STATE_COOKIE = "puzzle_oauth_state"
+OAUTH_STATE_SECONDS = 60 * 10
 CHANGELOG_COLLECTION = "UpdateLogs"
 
 
@@ -62,6 +75,66 @@ def verify_access(token):
 def require_access(request: Request):
     if not verify_access(request.cookies.get(ACCESS_COOKIE, "")):
         raise HTTPException(403, "請從數位典藏館管理後台進入")
+
+
+def oauth_settings(provider):
+    settings = {
+        "google": (
+            GOOGLE_CLIENT_ID,
+            GOOGLE_CLIENT_SECRET,
+            "https://accounts.google.com/o/oauth2/v2/auth",
+            "openid email profile",
+        ),
+        "github": (
+            GITHUB_CLIENT_ID,
+            GITHUB_CLIENT_SECRET,
+            "https://github.com/login/oauth/authorize",
+            "read:user user:email",
+        ),
+    }.get(provider)
+    if not settings:
+        raise HTTPException(404, "不支援的登入方式")
+    if not all(settings[:2]) or not PUZZLE_ADMIN_BASE_URL:
+        raise HTTPException(503, f"{provider.title()} 登入尚未完成設定")
+    if not PUZZLE_ADMIN_EMAILS:
+        raise HTTPException(503, "管理員信箱白名單尚未設定")
+    return settings
+
+
+def oauth_redirect_uri(provider):
+    return f"{PUZZLE_ADMIN_BASE_URL}/admin/puzzles/oauth/{provider}/callback"
+
+
+async def oauth_email(provider, code, redirect_uri):
+    client_id, client_secret, _, _ = oauth_settings(provider)
+    async with httpx.AsyncClient(timeout=10) as client:
+        if provider == "google":
+            token_response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={"client_id": client_id, "client_secret": client_secret, "code": code, "grant_type": "authorization_code", "redirect_uri": redirect_uri},
+            )
+            token_response.raise_for_status()
+            access_token = token_response.json().get("access_token", "")
+            user_response = await client.get("https://openidconnect.googleapis.com/v1/userinfo", headers={"Authorization": f"Bearer {access_token}"})
+            user_response.raise_for_status()
+            user = user_response.json()
+            return user.get("email", "").casefold() if user.get("email_verified") else ""
+
+        token_response = await client.post(
+            "https://github.com/login/oauth/access_token",
+            data={"client_id": client_id, "client_secret": client_secret, "code": code, "redirect_uri": redirect_uri},
+            headers={"Accept": "application/json"},
+        )
+        token_response.raise_for_status()
+        access_token = token_response.json().get("access_token", "")
+        email_response = await client.get(
+            "https://api.github.com/user/emails",
+            headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {access_token}", "X-GitHub-Api-Version": "2022-11-28"},
+        )
+        email_response.raise_for_status()
+        emails = [item for item in email_response.json() if item.get("verified")]
+        selected = next((item for item in emails if item.get("primary")), emails[0] if emails else {})
+        return str(selected.get("email", "")).casefold()
 
 
 class PuzzleSettings(BaseModel):
@@ -217,8 +290,59 @@ async def puzzle_admin_enter(token: str):
     return response
 
 
-@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_access)])
-async def puzzle_admin_page():
+@router.get("/login", response_class=HTMLResponse)
+async def puzzle_admin_login():
+    return HTMLResponse(LOGIN_HTML)
+
+
+@router.get("/login/{provider}")
+async def puzzle_admin_oauth_login(provider: str):
+    client_id, _, authorize_url, scope = oauth_settings(provider)
+    state = sign_access({"exp": int(time.time()) + OAUTH_STATE_SECONDS, "provider": provider, "nonce": secrets.token_urlsafe(16)})
+    url = authorize_url + "?" + urlencode(
+        {"client_id": client_id, "redirect_uri": oauth_redirect_uri(provider), "response_type": "code", "scope": scope, "state": state}
+    )
+    response = RedirectResponse(url, 303)
+    response.set_cookie(OAUTH_STATE_COOKIE, state, max_age=OAUTH_STATE_SECONDS, httponly=True, secure=True, samesite="lax", path="/admin/puzzles/oauth")
+    return response
+
+
+@router.get("/oauth/{provider}/callback")
+async def puzzle_admin_oauth_callback(request: Request, provider: str, code: str = "", state: str = "", error: str = ""):
+    state_data = verify_access(state)
+    if error or not code or not state_data or state_data.get("provider") != provider or request.cookies.get(OAUTH_STATE_COOKIE) != state:
+        raise HTTPException(400, "OAuth 登入請求無效或已過期")
+    try:
+        email = await oauth_email(provider, code, oauth_redirect_uri(provider))
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(502, "OAuth 登入服務暫時無法使用") from exc
+    if not email or email not in PUZZLE_ADMIN_EMAILS:
+        raise HTTPException(403, "此帳號未被授權使用謎題管理後台")
+    response = RedirectResponse("/admin/puzzles", 303)
+    response.set_cookie(
+        ACCESS_COOKIE,
+        sign_access({"exp": int(time.time()) + ACCESS_SECONDS, "email": email, "provider": provider}),
+        max_age=ACCESS_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/admin/puzzles",
+    )
+    response.delete_cookie(OAUTH_STATE_COOKIE, path="/admin/puzzles/oauth")
+    return response
+
+
+@router.get("/logout")
+async def puzzle_admin_logout():
+    response = RedirectResponse("/admin/puzzles/login", 303)
+    response.delete_cookie(ACCESS_COOKIE, path="/admin/puzzles")
+    return response
+
+
+@router.get("", response_class=HTMLResponse)
+async def puzzle_admin_page(request: Request):
+    if not verify_access(request.cookies.get(ACCESS_COOKIE, "")):
+        return RedirectResponse("/admin/puzzles/login", 303)
     return HTMLResponse(ADMIN_HTML)
 
 
@@ -350,6 +474,13 @@ async def update_changelog(entry_id: str, entry: ChangelogEntry):
         raise HTTPException(404, "找不到更新日誌")
     document.update({**changelog_data(entry), "updated_at": datetime.now(timezone.utc)})
     return {"ok": True}
+
+
+LOGIN_HTML = """<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>謎題管理登入</title><style>
+body{font:16px system-ui;display:grid;min-height:100vh;margin:0;place-items:center;background:#f5f7f5;color:#18311f}.card{width:min(420px,calc(100% - 40px));padding:28px;background:#fff;border-radius:12px;box-shadow:0 10px 35px #0002}h1{margin-top:0}.actions{display:grid;gap:12px;margin-top:24px}a{padding:12px 16px;color:#fff;background:#1d7a3b;border-radius:7px;text-align:center;text-decoration:none}a.github{background:#24292f}.muted{color:#607067}
+</style></head><body><main class="card"><h1>謎題管理登入</h1><p class="muted">請使用已列入管理員白名單的帳號登入。</p><div class="actions"><a href="/admin/puzzles/login/google">使用 Google 登入</a><a class="github" href="/admin/puzzles/login/github">使用 GitHub 登入</a></div></main></body></html>"""
 
 
 ADMIN_HTML = """<!doctype html>
