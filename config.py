@@ -11,6 +11,16 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 CWA_API_KEY = os.environ.get("CWA_API_KEY", "")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 PUZZLE_ADMIN_SECRET = os.environ.get("PUZZLE_ADMIN_SECRET", "")
+PUZZLE_ADMIN_BASE_URL = os.environ.get("PUZZLE_ADMIN_BASE_URL", "").rstrip("/")
+PUZZLE_ADMIN_EMAILS = {
+    email.strip().casefold()
+    for email in os.environ.get("PUZZLE_ADMIN_EMAILS", "").split(",")
+    if email.strip()
+}
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
+GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
 
 # Flex Message 卡片與 UI 預設設定
 PRIMARY_COLOR = "#1DB446"
