@@ -357,6 +357,66 @@ async def process_itinerary(
 # ==========================================
 # 🌟 模組二：滿血圖片辨識 (加入記憶體快取)
 # ==========================================
+def _build_recognition_context(articles):
+    knowledge_by_place = {}
+    aliases_by_place = {}
+    recognition_lines = []
+
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+        title = str(article.get("title", "")).strip()
+        recognition = article.get("recognition")
+        if not isinstance(recognition, dict) or not title or recognition.get("enabled") is not True:
+            continue
+
+        def clean_values(field, limit):
+            values = recognition.get(field)
+            if not isinstance(values, list):
+                return []
+            return [str(value).strip()[:200] for value in values[:limit] if str(value).strip()]
+
+        aliases = clean_values("aliases", 10)
+        sign_texts = clean_values("sign_texts", 10)
+        visual_features = clean_values("visual_features", 15)
+        knowledge_by_place[title] = article
+        aliases_by_place[title] = title
+        aliases_by_place.update({alias: title for alias in aliases})
+        recognition_lines.append(
+            f"{title}\n"
+            f"  別名：{'、'.join(aliases) or '無'}\n"
+            f"  招牌文字：{'、'.join(sign_texts) or '無'}\n"
+            f"  可見特徵：{'；'.join(visual_features) or '無'}"
+        )
+
+    return knowledge_by_place, aliases_by_place, recognition_lines
+
+
+def _build_reference_image_urls(knowledge_by_place, limit=12):
+    archive_origin = urllib.parse.urlparse(ARCHIVE_ARTICLES_URL)
+    references = []
+    for title, article in knowledge_by_place.items():
+        values = (article.get("recognition") or {}).get("reference_images")
+        if not isinstance(values, list):
+            continue
+        for value in values[:3]:
+            url = urllib.parse.urljoin(ARCHIVE_ARTICLES_URL, str(value).strip())
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme == "https" and parsed.netloc == archive_origin.netloc:
+                references.append((title, url))
+                if len(references) == limit:
+                    return references
+    return references
+
+
+def _image_mime_type(image_bytes):
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
 async def process_image_identification(image_bytes, user_id):
     """從數位典藏歷史館抓取文章，進行視覺辨識與導覽生成"""
     image_hash = hashlib.sha256(image_bytes).hexdigest()
@@ -366,39 +426,66 @@ async def process_image_identification(image_bytes, user_id):
             archive_response = await client.get(ARCHIVE_ARTICLES_URL)
             archive_response.raise_for_status()
         articles = archive_response.json().get("articles", [])
-        knowledge_by_place = {
-            str(article.get("title", "")).strip(): article
-            for article in articles
-            if str(article.get("title", "")).strip()
-        }
+        knowledge_by_place, aliases_by_place, recognition_lines = _build_recognition_context(articles)
         if not knowledge_by_place:
-            raise ValueError("數位典藏站沒有可用歷史文章")
+            raise ValueError("數位典藏站沒有啟用圖片辨識的歷史文章")
     except Exception as e:
         print("抓取數位典藏站資料失敗:", e)
         ai_response_text = "目前無法讀取數位典藏歷史資料，請稍後再試。"
         set_user_cache(user_id, ai_response_text)
         return {"aiResponse": ai_response_text, "locationName": "", "hash": image_hash}
 
-    whitelist_places = list(knowledge_by_place)
-    whitelist_places.sort(key=len, reverse=True)
-    places_str = "\n    - ".join(whitelist_places) if whitelist_places else "無可用白名單"
+    places_str = "\n- ".join(recognition_lines)
+    reference_parts = []
+    exact_match = None
+    async with httpx.AsyncClient(timeout=10) as client:
+        for title, url in _build_reference_image_urls(knowledge_by_place):
+            try:
+                reference_response = await client.get(url)
+                reference_response.raise_for_status()
+                reference_bytes = reference_response.content
+                if not reference_response.headers.get("content-type", "").lower().startswith("image/"):
+                    continue
+                if not reference_bytes or len(reference_bytes) > 10 * 1024 * 1024:
+                    continue
+                if hashlib.sha256(reference_bytes).hexdigest() == image_hash:
+                    exact_match = title
+                    break
+                reference_parts.extend([
+                    f"「{title}」的已知參考照片：",
+                    {"mime_type": _image_mime_type(reference_bytes), "data": reference_bytes},
+                ])
+            except Exception as error:
+                print(f"讀取典藏參考照片失敗: {error}")
 
-    prompt = render_prompt("image_identification", places_str=places_str)
+    prompt = render_prompt("image_identification", places_str=places_str) + """
 
-    response = model.generate_content([
-        prompt,
-        {"mime_type": "image/jpeg", "data": image_bytes}
-    ])
-    visual_text = response.text
-    
-    best_place = "未知地點"
-    if "鑑定結果：" in visual_text:
-        first_line = visual_text.split("\n")[0]
-        inferred_place = first_line.replace("鑑定結果：", "").strip()
-        for valid_place in whitelist_places:
-            if valid_place in inferred_place:
-                best_place = valid_place
-                break
+參考照片規則：
+1. 已知參考照片是最高優先證據。
+2. 比較待辨識照片與參考照片的建築結構及固定特徵。
+3. 歷史背景不可作為照片辨識證據。
+4. 第一行必須使用白名單正式地點名稱。
+"""
+
+    if exact_match:
+        best_place = exact_match
+        visual_text = f"鑑定結果：{best_place}\n與典藏參考照片完全一致。"
+    else:
+        response = model.generate_content([
+            prompt,
+            "待辨識照片：",
+            {"mime_type": _image_mime_type(image_bytes), "data": image_bytes},
+            *reference_parts,
+        ])
+        visual_text = response.text
+        best_place = "未知地點"
+        if "鑑定結果：" in visual_text:
+            first_line = visual_text.split("\n")[0]
+            inferred_place = first_line.replace("鑑定結果：", "").strip()
+            for candidate in sorted(aliases_by_place, key=len, reverse=True):
+                if candidate in inferred_place:
+                    best_place = aliases_by_place[candidate]
+                    break
 
     if best_place == "未知地點":
         observation = visual_text.replace("鑑定結果：未知地點", "").strip()
