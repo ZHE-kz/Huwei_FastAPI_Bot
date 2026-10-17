@@ -385,6 +385,25 @@ def _build_reference_image_urls(knowledge_by_place, limit=12):
     return references
 
 
+def _build_article_video(article):
+    recognition = article.get("recognition") or {}
+    video_value = str(recognition.get("video_url", "")).strip()
+    preview_value = str(recognition.get("video_preview_url", "")).strip()
+    if not video_value or not preview_value:
+        return None
+    video_url = urllib.parse.urljoin(ARCHIVE_ARTICLES_URL, video_value)
+    preview_url = urllib.parse.urljoin(ARCHIVE_ARTICLES_URL, preview_value)
+    archive_host = urllib.parse.urlparse(ARCHIVE_ARTICLES_URL).netloc
+
+    def is_archive_https(url):
+        parsed = urllib.parse.urlparse(url)
+        return parsed.scheme == "https" and parsed.netloc == archive_host
+
+    if not is_archive_https(video_url) or not is_archive_https(preview_url):
+        return None
+    return {"videoUrl": video_url, "videoPreviewUrl": preview_url}
+
+
 def _image_mime_type(image_bytes):
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -508,6 +527,7 @@ async def process_image_identification(image_bytes, user_id):
         )
 
     final_ai_text = f"我判斷這裡應該是「{best_place}」。\n\n{intro_response.text}{easter_egg_plot}"
+    video = _build_article_video(article) or {}
 
     # ⚡ 完美將圖片辨識結果存入記憶體口袋，語音秒抓！
     set_user_cache(user_id, final_ai_text)
@@ -517,5 +537,6 @@ async def process_image_identification(image_bytes, user_id):
         "locationName": best_place,
         "hash": image_hash,
         "visualText": visual_text,
-        "needsConfirmation": True
+        "needsConfirmation": True,
+        **video,
     }

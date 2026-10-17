@@ -169,6 +169,14 @@ async def background_task_router(payload: dict):
                                         }
                                     ]
                                 }
+                                video_url = result.get("videoUrl")
+                                video_preview_url = result.get("videoPreviewUrl")
+                                if video_url and video_preview_url:
+                                    reply_payload["messages"].append({
+                                        "type": "video",
+                                        "originalContentUrl": video_url,
+                                        "previewImageUrl": video_preview_url,
+                                    })
                                 res = await client.post(line_url, headers=line_headers, json=reply_payload)
                                 print(f"🚀 圖片辨識結果回傳 LINE: {res.status_code} - {res.text}")
                             else:
