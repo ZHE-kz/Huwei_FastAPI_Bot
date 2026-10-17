@@ -1,10 +1,13 @@
 import base64
+import asyncio
 import hashlib
 import hmac
 import json
+import os
+import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 import httpx
 from datetime import datetime
 from admin_tools import record_deployment_changelog, router as puzzle_admin_router
@@ -13,6 +16,7 @@ from itinerary_processor import process_image_identification, process_itinerary
 from puzzle_core import process_puzzle_event, should_route_to_puzzle
 from firestore_client import get_db
 from maps import build_itinerary_google_map_url
+from voice_service import close_http_client
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -20,7 +24,10 @@ async def lifespan(_app):
         record_deployment_changelog()
     except Exception as error:
         print(f"[CHANGELOG] 自動建立部署日誌失敗: {error}")
-    yield
+    try:
+        yield
+    finally:
+        await close_http_client()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -162,6 +169,14 @@ async def background_task_router(payload: dict):
                                         }
                                     ]
                                 }
+                                video_url = result.get("videoUrl")
+                                video_preview_url = result.get("videoPreviewUrl")
+                                if video_url and video_preview_url:
+                                    reply_payload["messages"].append({
+                                        "type": "video",
+                                        "originalContentUrl": video_url,
+                                        "previewImageUrl": video_preview_url,
+                                    })
                                 res = await client.post(line_url, headers=line_headers, json=reply_payload)
                                 print(f"🚀 圖片辨識結果回傳 LINE: {res.status_code} - {res.text}")
                             else:
@@ -188,6 +203,31 @@ async def background_task_router(payload: dict):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/tts/{profile}/{cache_key}.mp3")
+async def tts_audio(profile: str, cache_key: str):
+    if not re.fullmatch(r"[\w.-]{1,96}", profile) or not re.fullmatch(
+        r"[0-9a-f]{64}", cache_key
+    ):
+        raise HTTPException(status_code=404, detail="Audio not found")
+
+    bucket_name = os.environ.get("TTS_AUDIO_BUCKET", "").strip()
+    if not bucket_name:
+        raise HTTPException(status_code=503, detail="Audio storage unavailable")
+
+    from google.cloud import storage
+
+    blob = storage.Client().bucket(bucket_name).blob(f"tts/{profile}/{cache_key}.mp3")
+    try:
+        audio_bytes = await asyncio.to_thread(blob.download_as_bytes)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Audio not found")
+    return Response(
+        content=audio_bytes,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
 
 
 @app.get("/maps/route/{itinerary_id}")
