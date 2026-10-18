@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse, Response
 import httpx
 from datetime import datetime
 from admin_tools import record_deployment_changelog, router as puzzle_admin_router
+from beacon_core import process_beacon_event
 from config import (
     CWA_API_KEY,
     GEMINI_API_KEY,
@@ -67,7 +68,7 @@ async def send_loading_animation(user_id: str, line_token: str, seconds: int = 6
         except Exception as e:
             print(f"觸發 Loading 動畫失敗: {e}")
 
-async def background_task_router(payload: dict, line_token: str):
+async def background_task_router(payload: dict, line_token: str, account_id: str = "default"):
     """背景分發中心：處理所有耗時的 AI 任務"""
     print("🔥 [DEBUG 0] 成功進入 background_task_router 函式！")
     try:
@@ -87,6 +88,10 @@ async def background_task_router(payload: dict, line_token: str):
             user_text = raw_text.strip() if raw_text else ""
 
             if not reply_token or not user_id:
+                continue
+
+            if event.get("type") == "beacon":
+                await process_beacon_event(event, line_token, account_id)
                 continue
 
             await send_loading_animation(user_id, line_token, seconds=60)
@@ -257,6 +262,7 @@ async def _handle_line_webhook(
     background_tasks: BackgroundTasks,
     channel_secret: str,
     access_token: str,
+    account_id: str = "default",
 ):
     try:
         body = await request.body()
@@ -271,7 +277,12 @@ async def _handle_line_webhook(
         if not payload:
             raise HTTPException(status_code=400, detail="Invalid Request")
 
-        background_tasks.add_task(background_task_router, payload, access_token)
+        background_tasks.add_task(
+            background_task_router,
+            payload,
+            access_token,
+            account_id,
+        )
         return {"status": "Processing in background"}
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
@@ -304,4 +315,5 @@ async def line_account_webhook(
         background_tasks,
         channel_secret,
         access_token,
+        account_id,
     )
