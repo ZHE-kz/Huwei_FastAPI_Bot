@@ -131,43 +131,19 @@ async def process_itinerary(
     if user_text.strip() == "播放語音":
         target_text = get_user_cache(user_id)
 
-        # 呼叫 voice_service 取得音檔 bytes
-        from voice_service import generate_tts_audio_bytes
-        audio_bytes = await generate_tts_audio_bytes(target_text)
-
-        audio_url = ""
-        if audio_bytes:
-            try:
-                import uuid
-                file_name = f"tts_audio_{user_id}_{uuid.uuid4().hex[:6]}.mp3"
-                
-                # 🌟 改用 uguu.se 免費直連上傳 API
-                files = {'files[]': (file_name, audio_bytes, 'audio/mpeg')}
-                
-                async with httpx.AsyncClient() as client:
-                    response = await client.post("https://uguu.se/upload.php", files=files, timeout=30.0)
-                    
-                    if response.status_code == 200:
-                        try:
-                            res_json = response.json()
-                            if res_json.get("success"):
-                                files_data = res_json.get("files", [])
-                                if files_data:
-                                    audio_url = files_data[0].get("url", "")
-                        except Exception as parse_err:
-                            print(f"🚨 解析 uguu JSON 失敗: {parse_err}")
-            except Exception as e:
-                print(f"🚨 上傳語音過程發生例外:\n{e}")
+        from voice_service import get_http_client, get_or_create_tts_audio
+        audio_result = await get_or_create_tts_audio(target_text)
 
         # 直接透過免費的 Reply API 一次性回覆給使用者！
-        if audio_url:
+        if audio_result:
+            audio_url, duration_ms = audio_result
             reply_payload = {
                 "replyToken": reply_token,
                 "messages": [
                     {
                         "type": "audio",
                         "originalContentUrl": audio_url,
-                        "duration": 15000
+                        "duration": duration_ms
                     },
                     {
                         "type": "text",
@@ -181,11 +157,11 @@ async def process_itinerary(
                 "messages": [{"type": "text", "text": "🔊 語音生成發生了一點小狀況，請再試一次！"}]
             }
 
-        async with httpx.AsyncClient() as client:
-            line_url = "https://api.line.me/v2/bot/message/reply"
-            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {line_token}"}
-            res = await client.post(line_url, headers=headers, json=reply_payload, timeout=30.0)
-            print(f"✅免費 Reply 語音回覆結果: {res.status_code} - {res.text}")
+        client = get_http_client()
+        line_url = "https://api.line.me/v2/bot/message/reply"
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {line_token}"}
+        res = await client.post(line_url, headers=headers, json=reply_payload, timeout=30.0)
+        print(f"✅ Reply 語音回覆狀態: {res.status_code}")
         return
 
     # 🕵️‍♂️ 管理員隱藏密語攔截 (清空快取)
@@ -409,6 +385,25 @@ def _build_reference_image_urls(knowledge_by_place, limit=12):
     return references
 
 
+def _build_article_video(article):
+    recognition = article.get("recognition") or {}
+    video_value = str(recognition.get("video_url", "")).strip()
+    preview_value = str(recognition.get("video_preview_url", "")).strip()
+    if not video_value or not preview_value:
+        return None
+    video_url = urllib.parse.urljoin(ARCHIVE_ARTICLES_URL, video_value)
+    preview_url = urllib.parse.urljoin(ARCHIVE_ARTICLES_URL, preview_value)
+    archive_host = urllib.parse.urlparse(ARCHIVE_ARTICLES_URL).netloc
+
+    def is_archive_https(url):
+        parsed = urllib.parse.urlparse(url)
+        return parsed.scheme == "https" and parsed.netloc == archive_host
+
+    if not is_archive_https(video_url) or not is_archive_https(preview_url):
+        return None
+    return {"videoUrl": video_url, "videoPreviewUrl": preview_url}
+
+
 def _image_mime_type(image_bytes):
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -532,6 +527,7 @@ async def process_image_identification(image_bytes, user_id):
         )
 
     final_ai_text = f"我判斷這裡應該是「{best_place}」。\n\n{intro_response.text}{easter_egg_plot}"
+    video = _build_article_video(article) or {}
 
     # ⚡ 完美將圖片辨識結果存入記憶體口袋，語音秒抓！
     set_user_cache(user_id, final_ai_text)
@@ -541,5 +537,6 @@ async def process_image_identification(image_bytes, user_id):
         "locationName": best_place,
         "hash": image_hash,
         "visualText": visual_text,
-        "needsConfirmation": True
+        "needsConfirmation": True,
+        **video,
     }

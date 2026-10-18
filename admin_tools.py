@@ -14,8 +14,9 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from google.api_core.exceptions import AlreadyExists
 from google.cloud.firestore_v1 import Query
 from openpyxl import load_workbook
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from beacon_core import BEACON_COLLECTION, normalize_beacon_config
 from config import PUZZLE_ADMIN_SECRET
 from firestore_client import get_db
 from puzzle_core import PUZZLE_COLLECTION, force_clear_puzzle_cache, load_puzzle_config, normalize_stage
@@ -87,6 +88,16 @@ class ChangelogEntry(BaseModel):
     title: str
     summary: str
     version: str = ""
+
+
+class BeaconConfig(BaseModel):
+    enabled: bool = True
+    place_name: str = Field(min_length=1, max_length=100)
+    message: str = Field(default="", max_length=2000)
+    enter_message: str = Field(default="", max_length=2000)
+    leave_message: str = Field(default="", max_length=2000)
+    banner_message: str = Field(default="", max_length=2000)
+    cooldown_seconds: int = Field(default=300, ge=0, le=86400)
 
 
 def changelog_data(entry):
@@ -291,6 +302,33 @@ async def update_stage(stage_id: str, stage: PuzzleStage):
     return {"ok": True, "stage": data}
 
 
+@router.get("/api/beacons", dependencies=[Depends(require_access)])
+async def list_beacons():
+    items = []
+    for document in get_db().collection(BEACON_COLLECTION).stream():
+        items.append({"hwid": document.id, **normalize_beacon_config(document.to_dict())})
+    return {"beacons": sorted(items, key=lambda item: item["hwid"])}
+
+
+@router.put("/api/beacons/{hwid}", dependencies=[Depends(require_access)])
+async def update_beacon(hwid: str, beacon: BeaconConfig):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", hwid):
+        raise HTTPException(400, "hwid 只能使用英數、底線與連字號")
+    data = normalize_beacon_config(beacon.model_dump())
+    if not data["place_name"]:
+        raise HTTPException(400, "地點名稱不可空白")
+    get_db().collection(BEACON_COLLECTION).document(hwid).set(data)
+    return {"ok": True, "beacon": {"hwid": hwid, **data}}
+
+
+@router.delete("/api/beacons/{hwid}", dependencies=[Depends(require_access)])
+async def delete_beacon(hwid: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", hwid):
+        raise HTTPException(400, "hwid 格式錯誤")
+    get_db().collection(BEACON_COLLECTION).document(hwid).delete()
+    return {"ok": True}
+
+
 @router.get("/api/prompts", dependencies=[Depends(require_access)])
 async def get_prompts():
     return {"prompts": list_prompts()}
@@ -357,27 +395,33 @@ ADMIN_HTML = """<!doctype html>
 <title>虎尾 Bot 管理後台</title><style>
 body{font:16px system-ui;max-width:980px;margin:auto;padding:24px;background:#f5f7f5;color:#18311f}h1{margin-top:0}
 section{background:white;padding:20px;margin:16px 0;border-radius:12px;box-shadow:0 2px 12px #0001}label{display:block;margin:10px 0 4px}
-input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #b8c7bb;border-radius:7px}textarea{min-height:76px}.prompt textarea{min-height:260px;font:14px ui-monospace,monospace}.prompt,.log{border-top:1px solid #ddd;padding:12px 0}.log p{white-space:pre-wrap}button,.button{display:inline-block;margin-top:14px;padding:10px 16px;border:0;border-radius:7px;background:#1d7a3b;color:white;cursor:pointer;text-decoration:none}.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0}.tabs button{margin:0;background:#dce7df;color:#18311f}.tabs button.active{background:#1d7a3b;color:white}.panel[hidden]{display:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stage{border-top:1px solid #ddd;padding:12px 0}.muted{color:#607067}.status{margin-left:10px}@media(max-width:650px){.grid{grid-template-columns:1fr}}
+input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #b8c7bb;border-radius:7px}textarea{min-height:76px}.prompt textarea{min-height:260px;font:14px ui-monospace,monospace}.prompt,.log{border-top:1px solid #ddd;padding:12px 0}.log p{white-space:pre-wrap}button,.button{display:inline-block;margin-top:14px;padding:10px 16px;border:0;border-radius:7px;background:#1d7a3b;color:white;cursor:pointer;text-decoration:none}button.danger{background:#a72c2c;margin-left:8px}.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0}.tabs button{margin:0;background:#dce7df;color:#18311f}.tabs button.active{background:#1d7a3b;color:white}.panel[hidden]{display:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stage{border-top:1px solid #ddd;padding:12px 0}.muted{color:#607067}.status{margin-left:10px}@media(max-width:650px){.grid{grid-template-columns:1fr}}
 </style></head><body><h1>虎尾 Bot 管理後台</h1><p class="muted">管理解謎題庫、AI Prompt 與更新日誌；修改會直接寫入 Firestore。</p>
-<nav class="tabs"><button type="button" class="active" data-panel="puzzle-panel">解謎題庫</button><button type="button" data-panel="prompt-panel">AI Prompt</button><button type="button" data-panel="changelog-panel">更新日誌</button></nav>
+<nav class="tabs"><button type="button" class="active" data-panel="puzzle-panel">解謎題庫</button><button type="button" data-panel="beacon-panel">LINE Beacon</button><button type="button" data-panel="prompt-panel">AI Prompt</button><button type="button" data-panel="changelog-panel">更新日誌</button></nav>
 <div id="puzzle-panel" class="panel"><section><h2>遊戲設定</h2><form id="settings"><div class="grid"><div><label>啟動指令</label><input name="start_command" required></div><div><label>起始關卡</label><input name="start_stage" required></div></div><button>儲存設定</button></form></section>
 <section><h2>試算表匯入</h2><p class="muted">支援 CSV、XLSX，最多 5 MB／200 題。同 ID 關卡會覆寫，其他既有關卡不刪除。</p><form id="upload"><input type="file" name="file" accept=".csv,.xlsx" required><button>上傳並匯入</button><span id="upload-status" class="status"></span></form><a class="button" href="/admin/puzzles/template.csv">下載 CSV 範本</a></section>
 <section><h2>新增／修改關卡</h2><form id="stage"><div class="grid"><div><label>關卡 ID</label><input name="stage_id" placeholder="STAGE_01" required></div><div><label>下一關 ID</label><input name="next_stage_id"></div></div><label>開場文字</label><textarea name="agent_intro" required></textarea><label>圖片辨識目標</label><textarea name="vision_target"></textarea><label><input style="width:auto" type="checkbox" name="requires_image"> 此關需要先上傳照片</label><label>題目／提示</label><textarea name="puzzle_hint" required></textarea><label>正確答案</label><input name="puzzle_answer" required><label>答對訊息</label><textarea name="success_text" required></textarea><button>儲存關卡</button></form></section>
 <section><h2>目前關卡</h2><div id="list"></div></section></div>
+<div id="beacon-panel" class="panel" hidden><section><h2>新增／修改 LINE Beacon</h2><p class="muted">每台 Beacon 使用唯一 hwid；重複 hwid 會更新原設定。</p><form id="beacon"><div class="grid"><div><label>Beacon hwid</label><input name="hwid" maxlength="64" pattern="[A-Za-z0-9_-]+" required></div><div><label>地點名稱</label><input name="place_name" maxlength="100" required></div></div><div class="grid"><div><label>冷卻秒數</label><input name="cooldown_seconds" type="number" min="0" max="86400" value="300" required></div><div><label><input style="width:auto" type="checkbox" name="enabled" checked> 啟用這台 Beacon</label></div></div><label>通用自訂訊息（選填）</label><textarea name="message" maxlength="2000"></textarea><label>進入訊息 enter（選填，優先於通用訊息）</label><textarea name="enter_message" maxlength="2000"></textarea><label>離開訊息 leave（選填）</label><textarea name="leave_message" maxlength="2000"></textarea><label>鄰近訊息 banner（選填）</label><textarea name="banner_message" maxlength="2000"></textarea><button>儲存 Beacon</button><button id="beacon-cancel" type="button">清空表單</button><span id="beacon-status" class="status"></span></form></section><section><h2>已設定的 Beacon</h2><div id="beacon-list"></div></section></div>
 <div id="prompt-panel" class="panel" hidden><section><h2>AI Prompt 管理</h2><p class="muted">變數必須保留，格式為 <code>{{variable}}</code>。儲存後最多 5 分鐘內套用到所有 Cloud Run 實例。</p><div id="prompts"></div></section></div>
 <div id="changelog-panel" class="panel" hidden><section><h2>建立／修改更新日誌</h2><p class="muted">部署成功時會自動建立；也可以在這裡手動新增或修改。</p><form id="changelog-form"><div class="grid"><div><label>版本（選填）</label><input name="version" maxlength="30" placeholder="v1.2.0"></div><div><label>標題</label><input name="title" maxlength="100" required></div></div><label>更新內容</label><textarea name="summary" maxlength="5000" required></textarea><button id="changelog-submit">建立日誌</button><button id="changelog-cancel" type="button" hidden>取消修改</button><span id="changelog-status" class="status"></span></form></section><section><h2>最近更新</h2><div id="changelog-list"></div></section></div>
-<script>const settings=document.querySelector('#settings'),stage=document.querySelector('#stage'),upload=document.querySelector('#upload'),list=document.querySelector('#list'),prompts=document.querySelector('#prompts'),changelogForm=document.querySelector('#changelog-form'),changelogList=document.querySelector('#changelog-list'),changelogSubmit=document.querySelector('#changelog-submit'),changelogCancel=document.querySelector('#changelog-cancel'),changelogStatus=document.querySelector('#changelog-status'),uploadStatus=document.querySelector('#upload-status');
+<script>const settings=document.querySelector('#settings'),stage=document.querySelector('#stage'),upload=document.querySelector('#upload'),list=document.querySelector('#list'),beaconForm=document.querySelector('#beacon'),beaconList=document.querySelector('#beacon-list'),beaconCancel=document.querySelector('#beacon-cancel'),beaconStatus=document.querySelector('#beacon-status'),prompts=document.querySelector('#prompts'),changelogForm=document.querySelector('#changelog-form'),changelogList=document.querySelector('#changelog-list'),changelogSubmit=document.querySelector('#changelog-submit'),changelogCancel=document.querySelector('#changelog-cancel'),changelogStatus=document.querySelector('#changelog-status'),uploadStatus=document.querySelector('#upload-status');
 document.querySelectorAll('.tabs button').forEach(button=>button.onclick=()=>{document.querySelectorAll('.tabs button').forEach(item=>item.classList.toggle('active',item===button));document.querySelectorAll('.panel').forEach(panel=>panel.hidden=panel.id!==button.dataset.panel)});
 async function api(path='',options={}){const headers=options.body instanceof FormData?{}:{'Content-Type':'application/json'};const r=await fetch('/admin/puzzles/api'+path,{...options,headers:{...headers,...options.headers}});if(!r.ok)throw new Error(await r.text());return r.json()}
 function renderPrompts(items){prompts.replaceChildren(...items.map(p=>{const form=document.createElement('form');form.className='prompt';const title=document.createElement('h3');title.textContent=p.title;const variables=document.createElement('p');variables.className='muted';variables.textContent='必要變數：'+p.variables.map(name=>'{{'+name+'}}').join('、');const textarea=document.createElement('textarea');textarea.value=p.content;textarea.required=true;textarea.maxLength=20000;const button=document.createElement('button');button.textContent='儲存 Prompt';const status=document.createElement('span');status.className='status';form.append(title,variables,textarea,button,status);form.onsubmit=async e=>{e.preventDefault();status.textContent='儲存中…';try{const result=await api('/prompts/'+encodeURIComponent(p.id),{method:'PUT',body:JSON.stringify({content:textarea.value})});status.textContent=result.changed?'已儲存並記錄更新日誌':'內容未變更';if(result.changed){const current=await api('/changelog');renderChangelog(current.entries)}}catch(error){status.textContent='儲存失敗：'+error.message}};return form}))}
 function resetChangelog(){changelogForm.reset();delete changelogForm.dataset.id;changelogSubmit.textContent='建立日誌';changelogCancel.hidden=true}
 function editChangelog(item){changelogForm.elements.namedItem('version').value=item.version||'';changelogForm.elements.namedItem('title').value=item.title;changelogForm.elements.namedItem('summary').value=item.summary;changelogForm.dataset.id=item.id;changelogSubmit.textContent='儲存修改';changelogCancel.hidden=false;changelogForm.scrollIntoView({behavior:'smooth'})}
 function renderChangelog(items){changelogList.replaceChildren(...items.map(item=>{const row=document.createElement('article');row.className='log';const title=document.createElement('h3');title.textContent=(item.source==='deployment'?'自動｜':'')+(item.version?item.version+' — ':'')+item.title;const timestamp=document.createElement('time');timestamp.className='muted';timestamp.textContent=new Date(item.created_at).toLocaleString('zh-TW');const summary=document.createElement('p');summary.textContent=item.summary;const edit=document.createElement('button');edit.type='button';edit.textContent='修改';edit.onclick=()=>editChangelog(item);row.append(title,timestamp,summary,edit);return row}))}
-async function load(){const [data,promptData,changelogData]=await Promise.all([api(),api('/prompts'),api('/changelog')]);settings.start_command.value=data.settings.start_command;settings.start_stage.value=data.settings.start_stage;renderPrompts(promptData.prompts);renderChangelog(changelogData.entries);list.replaceChildren(...Object.entries(data.stages).sort().map(([id,s])=>{const row=document.createElement('div');row.className='stage';const title=document.createElement('strong');title.textContent=id+' — '+s.puzzle_hint;const edit=document.createElement('button');edit.textContent='編輯';edit.onclick=()=>fill(id,s);row.append(title,document.createElement('br'),edit);return row}))}
+function resetBeacon(){beaconForm.reset();beaconForm.enabled.checked=true;beaconForm.cooldown_seconds.value=300;beaconForm.hwid.readOnly=false;beaconStatus.textContent=''}
+function fillBeacon(item){resetBeacon();for(const [key,value] of Object.entries(item)){if(beaconForm[key])beaconForm[key].type==='checkbox'?beaconForm[key].checked=value:beaconForm[key].value=value??''}beaconForm.hwid.readOnly=true;beaconForm.scrollIntoView({behavior:'smooth'})}
+function renderBeacons(items){beaconList.replaceChildren(...items.map(item=>{const row=document.createElement('article');row.className='stage';const title=document.createElement('strong');title.textContent=item.hwid+' — '+item.place_name+(item.enabled?'':'（停用）');const detail=document.createElement('p');detail.className='muted';detail.textContent='冷卻 '+item.cooldown_seconds+' 秒';const edit=document.createElement('button');edit.type='button';edit.textContent='編輯';edit.onclick=()=>fillBeacon(item);const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='刪除';remove.onclick=async()=>{if(!confirm('確定刪除 Beacon '+item.hwid+'？'))return;await api('/beacons/'+encodeURIComponent(item.hwid),{method:'DELETE'});await load()};row.append(title,detail,edit,remove);return row}))}
+async function load(){const [data,beaconData,promptData,changelogData]=await Promise.all([api(),api('/beacons'),api('/prompts'),api('/changelog')]);settings.start_command.value=data.settings.start_command;settings.start_stage.value=data.settings.start_stage;renderBeacons(beaconData.beacons);renderPrompts(promptData.prompts);renderChangelog(changelogData.entries);list.replaceChildren(...Object.entries(data.stages).sort().map(([id,s])=>{const row=document.createElement('div');row.className='stage';const title=document.createElement('strong');title.textContent=id+' — '+s.puzzle_hint;const edit=document.createElement('button');edit.textContent='編輯';edit.onclick=()=>fill(id,s);row.append(title,document.createElement('br'),edit);return row}))}
 function fill(id,s){stage.stage_id.value=id;for(const [key,value] of Object.entries(s)){if(stage[key])stage[key].type==='checkbox'?stage[key].checked=value:stage[key].value=value??''}stage.scrollIntoView({behavior:'smooth'})}
 settings.onsubmit=async e=>{e.preventDefault();await api('/settings',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(settings)))});alert('設定已儲存')};
 upload.onsubmit=async e=>{e.preventDefault();uploadStatus.textContent='匯入中…';try{const result=await api('/import',{method:'POST',body:new FormData(upload)});uploadStatus.textContent='已匯入 '+result.imported+' 題';upload.reset();await load()}catch(error){uploadStatus.textContent='匯入失敗：'+error.message}};
 stage.onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(stage));const id=data.stage_id;delete data.stage_id;data.requires_image=stage.requires_image.checked;await api('/stages/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify(data)});alert('關卡已儲存');await load()};
+beaconCancel.onclick=resetBeacon;
+beaconForm.onsubmit=async e=>{e.preventDefault();beaconStatus.textContent='儲存中…';try{const data=Object.fromEntries(new FormData(beaconForm));const hwid=data.hwid;delete data.hwid;data.enabled=beaconForm.enabled.checked;data.cooldown_seconds=Number(data.cooldown_seconds);await api('/beacons/'+encodeURIComponent(hwid),{method:'PUT',body:JSON.stringify(data)});resetBeacon();beaconStatus.textContent='已儲存';await load()}catch(error){beaconStatus.textContent='儲存失敗：'+error.message}};
 changelogCancel.onclick=()=>{resetChangelog();changelogStatus.textContent=''};
 changelogForm.onsubmit=async e=>{e.preventDefault();const id=changelogForm.dataset.id;changelogStatus.textContent=id?'儲存中…':'建立中…';try{const data=Object.fromEntries(new FormData(changelogForm));await api('/changelog'+(id?'/'+encodeURIComponent(id):''),{method:id?'PUT':'POST',body:JSON.stringify(data)});resetChangelog();changelogStatus.textContent=id?'已修改':'已建立';const current=await api('/changelog');renderChangelog(current.entries)}catch(error){changelogStatus.textContent='操作失敗：'+error.message}};
 load();

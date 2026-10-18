@@ -7,6 +7,7 @@ firestore_client.get_db = lambda: None
 sys.modules["firestore_client"] = firestore_client
 
 from itinerary_processor import (
+    _build_article_video,
     _build_recognition_context,
     _build_reference_image_urls,
     _image_mime_type,
@@ -53,6 +54,37 @@ class RecognitionContextTests(unittest.TestCase):
             [("合同廳舍", "https://nfu-digital-archive.zheforge.com/uploads/reference.jpg")],
         )
         self.assertEqual(_image_mime_type(b"\x89PNG\r\n\x1a\nrest"), "image/png")
+
+    def test_video_returns_valid_archive_urls(self):
+        article = {
+            "recognition": {
+                "video_url": "/media/videos/place.mp4",
+                "video_preview_url": "/uploads/preview.jpg",
+            },
+        }
+
+        self.assertEqual(
+            _build_article_video(article),
+            {
+                "videoUrl": "https://nfu-digital-archive.zheforge.com/media/videos/place.mp4",
+                "videoPreviewUrl": "https://nfu-digital-archive.zheforge.com/uploads/preview.jpg",
+            },
+        )
+
+    def test_video_rejects_external_urls_and_missing_preview(self):
+        self.assertIsNone(
+            _build_article_video(
+                {
+                    "recognition": {
+                        "video_url": "https://attacker.example/video.mp4",
+                        "video_preview_url": "/uploads/preview.jpg",
+                    }
+                }
+            )
+        )
+        self.assertIsNone(
+            _build_article_video({"recognition": {"video_url": "/media/videos/place.mp4"}})
+        )
 
 
 if __name__ == "__main__":
