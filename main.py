@@ -11,7 +11,13 @@ from fastapi.responses import RedirectResponse, Response
 import httpx
 from datetime import datetime
 from admin_tools import record_deployment_changelog, router as puzzle_admin_router
-from config import CWA_API_KEY, GEMINI_API_KEY, LINE_ACCESS_TOKEN, LINE_CHANNEL_SECRET
+from config import (
+    CWA_API_KEY,
+    GEMINI_API_KEY,
+    LINE_ACCESS_TOKEN,
+    LINE_CHANNEL_SECRET,
+    get_line_account_credentials,
+)
 from itinerary_processor import process_image_identification, process_itinerary
 from puzzle_core import process_puzzle_event, should_route_to_puzzle
 from firestore_client import get_db
@@ -61,7 +67,7 @@ async def send_loading_animation(user_id: str, line_token: str, seconds: int = 6
         except Exception as e:
             print(f"觸發 Loading 動畫失敗: {e}")
 
-async def background_task_router(payload: dict):
+async def background_task_router(payload: dict, line_token: str):
     """背景分發中心：處理所有耗時的 AI 任務"""
     print("🔥 [DEBUG 0] 成功進入 background_task_router 函式！")
     try:
@@ -83,7 +89,7 @@ async def background_task_router(payload: dict):
             if not reply_token or not user_id:
                 continue
 
-            await send_loading_animation(user_id, LINE_ACCESS_TOKEN, seconds=60)
+            await send_loading_animation(user_id, line_token, seconds=60)
 
             route_to_puzzle = await should_route_to_puzzle(user_id, user_text)
             puzzle_image = None
@@ -91,7 +97,7 @@ async def background_task_router(payload: dict):
                 async with httpx.AsyncClient(timeout=15) as client:
                     response = await client.get(
                         f"https://api-data.line.me/v2/bot/message/{message['id']}/content",
-                        headers={"Authorization": f"Bearer {LINE_ACCESS_TOKEN}"},
+                        headers={"Authorization": f"Bearer {line_token}"},
                     )
                     response.raise_for_status()
                     puzzle_image = base64.b64encode(response.content).decode()
@@ -102,7 +108,7 @@ async def background_task_router(payload: dict):
                 user_text=user_text,
                 message_id=message.get("id"),
                 image_base64=puzzle_image,
-                line_token=LINE_ACCESS_TOKEN,
+                line_token=line_token,
                 gemini_key=GEMINI_API_KEY,
             ):
                 continue
@@ -116,7 +122,7 @@ async def background_task_router(payload: dict):
                         # 使用系統 CA 驗證 LINE API HTTPS 憑證
                         async with httpx.AsyncClient() as client:
                             content_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
-                            headers = {"Authorization": f"Bearer {LINE_ACCESS_TOKEN}"}
+                            headers = {"Authorization": f"Bearer {line_token}"}
                             img_res = await client.get(content_url, headers=headers)
                             
                             if img_res.status_code == 200:
@@ -147,7 +153,7 @@ async def background_task_router(payload: dict):
                                     print(f"存入圖片辨識歷史紀錄失敗: {e}")
                                 
                                 line_url = "https://api.line.me/v2/bot/message/reply"
-                                line_headers = {"Content-Type": "application/json", "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"}
+                                line_headers = {"Content-Type": "application/json", "Authorization": f"Bearer {line_token}"}
                                 reply_payload = {
                                     "replyToken": reply_token,
                                     "messages": [
@@ -191,7 +197,7 @@ async def background_task_router(payload: dict):
                 reply_token,
                 user_id,
                 user_text,
-                LINE_ACCESS_TOKEN,
+                line_token,
                 GEMINI_API_KEY,
                 CWA_API_KEY,
             )
@@ -246,14 +252,17 @@ async def itinerary_maps_route(itinerary_id: str):
     return RedirectResponse(build_itinerary_google_map_url(stops))
 
 
-@app.post("/")
-async def generate_itinerary_endpoint(request: Request, background_tasks: BackgroundTasks):
-    """Webhook 接收端點"""
+async def _handle_line_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    channel_secret: str,
+    access_token: str,
+):
     try:
         body = await request.body()
         signature = request.headers.get("x-line-signature", "")
         expected_signature = base64.b64encode(
-            hmac.new(LINE_CHANNEL_SECRET.encode(), body, hashlib.sha256).digest()
+            hmac.new(channel_secret.encode(), body, hashlib.sha256).digest()
         ).decode()
         if not signature or not hmac.compare_digest(signature, expected_signature):
             raise HTTPException(status_code=401, detail="Invalid signature")
@@ -262,7 +271,37 @@ async def generate_itinerary_endpoint(request: Request, background_tasks: Backgr
         if not payload:
             raise HTTPException(status_code=400, detail="Invalid Request")
 
-        background_tasks.add_task(background_task_router, payload)
+        background_tasks.add_task(background_task_router, payload, access_token)
         return {"status": "Processing in background"}
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
+
+
+@app.post("/")
+async def generate_itinerary_endpoint(request: Request, background_tasks: BackgroundTasks):
+    """既有主要 LINE 帳號 Webhook。"""
+    return await _handle_line_webhook(
+        request,
+        background_tasks,
+        LINE_CHANNEL_SECRET,
+        LINE_ACCESS_TOKEN,
+    )
+
+
+@app.post("/line/{account_id}")
+async def line_account_webhook(
+    account_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """額外 LINE 帳號 Webhook。"""
+    credentials = get_line_account_credentials(account_id)
+    if credentials is None:
+        raise HTTPException(status_code=404, detail="LINE account not configured")
+    channel_secret, access_token = credentials
+    return await _handle_line_webhook(
+        request,
+        background_tasks,
+        channel_secret,
+        access_token,
+    )
