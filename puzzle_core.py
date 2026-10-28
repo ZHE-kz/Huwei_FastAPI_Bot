@@ -169,7 +169,7 @@ async def process_puzzle_event(
                 state_ref.update({"status": "COMPLETED", "last_active": now})
                 await send_line_reply(line_token, reply_token, stage["success_text"])
         else:
-            await send_line_reply(line_token, reply_token, f"❌ 答錯囉！\\n\\n提示：{stage['puzzle_hint']}")
+            await send_line_reply(line_token, reply_token, f"❌ 答錯囉！\n\n提示：{stage['puzzle_hint']}")
         return True
 
     prompt = "📸 請依任務指示上傳照片。" if game_status == "WAITING_IMAGE" else "✍️ 請直接輸入解謎答案。"
