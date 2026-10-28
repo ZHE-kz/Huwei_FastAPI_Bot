@@ -1,0 +1,17 @@
+[
+  {"id": "sugar-factory", "text": "虎尾糖廠創設於 1906 年，是地方產業的重要記憶。"},
+  {"id": "iron-bridge", "text": "虎尾鐵橋跨越虎尾溪，曾肩負運送甘蔗的任務。"},
+  {"id": "towel-industry", "text": "虎尾毛巾產業累積數十年的技術，也持續發展新品牌。"},
+  {"id": "puppet-theater", "text": "布袋戲的掌中乾坤，保存了雲林重要的表演文化。"},
+  {"id": "air-base", "text": "虎尾舊機場留下日治時期至戰後的航空歷史。"},
+  {"id": "station", "text": "虎尾驛曾是糖業鐵路的重要節點，連結工場與聚落。"},
+  {"id": "market", "text": "虎尾市場匯集飲食、叫賣聲與居民的共同生活記憶。"},
+  {"id": "synagogue", "text": "涌翠閣經修復後，成為認識地方建築與人物故事的空間。"},
+  {"id": "date", "text": "典藏資料於 2026-10-15 完成數位整理。"},
+  {"id": "number", "text": "本批資料共有 128 件，分成 3 個主題。"},
+  {"id": "acronym", "text": "透過 AI、API 與 GPS，讓訪客更容易探索虎尾。"},
+  {"id": "markdown", "text": "## 虎尾記憶\n請閱讀 [典藏文章](https://example.com/archive) 📚"},
+  {"id": "decimal", "text": "這段口述歷史錄音長度約 2.5 分鐘。"},
+  {"id": "long-sentence", "text": "當糖廠汽笛響起時居民依照聲音安排工作與休息而這種生活節奏也逐漸成為地方共同記憶。"},
+  {"id": "mixed-language", "text": "LINE Bot 將 TTS 音檔送到使用者手機，URL 不會直接朗讀。"}
+]
