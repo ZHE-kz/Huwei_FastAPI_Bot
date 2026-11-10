@@ -19,6 +19,9 @@ from ai_client import configure_gemini, generate_itinerary_async
 from flex_builder import create_itinerary_flex, create_simple_location_flex
 from config import PROMOTE_TO_DB_THRESHOLD
 from prompt_store import render_prompt
+from bot_i18n import gemini_language_instruction, text as i18n_text
+from user_profiles import DEFAULT_PREFERENCES, get_profile, normalize_preferences
+from account_links import get_login_identity
 
 # 🌟 全域宣告模型
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -86,16 +89,32 @@ async def process_itinerary(
     line_token: str,
     gemini_key: str,
     cwa_key: str,
+    account_id: str = "default",
 ):
     # 🚀 一進來立刻觸發 LINE 思考中動畫，提升體驗感！
     await send_loading_animation(user_id, line_token, seconds=60)
     
     db = get_db()
+    try:
+        login_identity = await asyncio.to_thread(
+            get_login_identity, account_id, user_id
+        )
+        if login_identity:
+            profile = await asyncio.to_thread(get_profile, login_identity)
+            preferences = normalize_preferences(profile.get("preferences"))
+            has_saved_preferences = profile.get("updated_at") is not None
+        else:
+            preferences = normalize_preferences(DEFAULT_PREFERENCES)
+            has_saved_preferences = False
+    except Exception:
+        preferences = normalize_preferences(DEFAULT_PREFERENCES)
+        has_saved_preferences = False
+    language = preferences["language"]
     
     # 🌟 1. 閒聊與打招呼快速攔截 (Fast Path)
     casual_greetings = ["你好", "妳好", "哈囉", "嗨", "早安", "午安", "晚安", "hi", "hello"]
     if user_text.strip().lower() in casual_greetings:
-        welcome_text = "汪汪！你好呀！我是你的虎尾專屬導遊。請問今天想去哪裡走走，還是需要我為你推薦什麼特色景點呢？✨"
+        welcome_text = i18n_text(language, "welcome")
         
         # ⚡ 記入口袋
         set_user_cache(user_id, welcome_text)
@@ -132,7 +151,13 @@ async def process_itinerary(
         target_text = get_user_cache(user_id)
 
         from voice_service import get_http_client, get_or_create_tts_audio
-        audio_result = await get_or_create_tts_audio(target_text)
+        voice = preferences["voice"]
+        audio_result = await get_or_create_tts_audio(
+            target_text,
+            speaker=voice["speaker"] if has_saved_preferences else None,
+            speed=voice["speed"] if has_saved_preferences else None,
+            pitch=voice["pitch"] if has_saved_preferences else None,
+        )
 
         # 直接透過免費的 Reply API 一次性回覆給使用者！
         if audio_result:
@@ -154,7 +179,7 @@ async def process_itinerary(
         else:
             reply_payload = {
                 "replyToken": reply_token,
-                "messages": [{"type": "text", "text": "🔊 語音生成發生了一點小狀況，請再試一次！"}]
+                "messages": [{"type": "text", "text": i18n_text(language, "tts_error")}]
             }
 
         client = get_http_client()
@@ -200,6 +225,23 @@ async def process_itinerary(
             stops = it.get("stops") or it.get("example_stops") or []
             title = it.get("title") or it.get("example_title") or "Untitled"
             history_context += f"- Title: {title}\n  Stops: {json.dumps(stops, ensure_ascii=False)}\n"
+
+    preference_context = {
+        "language": language,
+        "interests": preferences["interests"],
+        "content_depth": preferences["content_depth"],
+        "preferred_duration": preferences["preferred_duration"],
+        "transportation": preferences["transportation"],
+        "walking_preference": preferences["walking_preference"],
+        "preferred_stay_minutes": preferences["stay_minutes"],
+    }
+    history_context += (
+        "\n[User Preferences]\n"
+        + json.dumps(preference_context, ensure_ascii=False)
+        + "\n"
+        + gemini_language_instruction(language)
+        + "\n"
+    )
 
     # 🧠 三模式 AI 判斷 Prompt
     prompt = render_prompt(
@@ -273,6 +315,7 @@ async def process_itinerary(
     try:
         payload_doc = {
             "user_id": user_id,
+            "account_id": account_id,
             "query": user_text,
             "raw_ai_response": ai_json,
             "status": "READY",
@@ -412,9 +455,17 @@ def _image_mime_type(image_bytes):
     return "image/jpeg"
 
 
-async def process_image_identification(image_bytes, user_id):
+async def process_image_identification(image_bytes, user_id, account_id="default"):
     """從數位典藏歷史館抓取文章，進行視覺辨識與導覽生成"""
     image_hash = hashlib.sha256(image_bytes).hexdigest()
+    try:
+        login_identity = await asyncio.to_thread(
+            get_login_identity, account_id, user_id
+        )
+        profile = await asyncio.to_thread(get_profile, login_identity) if login_identity else {}
+        language = normalize_preferences(profile.get("preferences"))["language"]
+    except Exception:
+        language = "zh-TW"
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -460,7 +511,7 @@ async def process_image_identification(image_bytes, user_id):
 2. 比較待辨識照片與參考照片的建築結構及固定特徵。
 3. 歷史背景不可作為照片辨識證據。
 4. 第一行必須使用白名單正式地點名稱。
-"""
+""" + "\n" + gemini_language_instruction(language)
 
     if exact_match:
         best_place = exact_match
@@ -484,7 +535,7 @@ async def process_image_identification(image_bytes, user_id):
 
     if best_place == "未知地點":
         observation = visual_text.replace("鑑定結果：未知地點", "").strip()
-        ai_response_text = f"哎呀，我判斷不出來這是哪裡，或者該景點尚未收錄在數位典藏歷史館哦！\n\n🔍 導遊的觀察筆記：\n{observation}"
+        ai_response_text = f"{i18n_text(language, 'unknown_place')}\n\n{observation}"
         
         # ⚡ 存入口袋
         set_user_cache(user_id, ai_response_text)
@@ -512,7 +563,7 @@ async def process_image_identification(image_bytes, user_id):
         "history_intro",
         best_place=best_place,
         local_knowledge=local_knowledge,
-    )
+    ) + "\n" + gemini_language_instruction(language)
 
     intro_response = model.generate_content(intro_prompt)
     

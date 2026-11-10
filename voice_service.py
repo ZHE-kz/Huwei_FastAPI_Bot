@@ -263,7 +263,12 @@ def get_audio_duration_ms(audio_bytes: bytes) -> Optional[int]:
         return None
 
 
-async def get_or_create_tts_audio(text: str) -> Optional[Tuple[str, int]]:
+async def get_or_create_tts_audio(
+    text: str,
+    speaker: Optional[str] = None,
+    speed: Optional[float] = None,
+    pitch: Optional[float] = None,
+) -> Optional[Tuple[str, int]]:
     """從 GCS 重用 SHA-256 快取；未命中才呼叫 GPU 並上傳。"""
     normalized_text = prepare_text_for_speech(text)
     bucket_name = os.environ.get("TTS_AUDIO_BUCKET", "").strip()
@@ -271,10 +276,13 @@ async def get_or_create_tts_audio(text: str) -> Optional[Tuple[str, int]]:
         print("🚨 [TTS Error] 文字為空或缺少 TTS_AUDIO_BUCKET")
         return None
 
-    speaker = os.environ.get("TTS_SPEAKER", "default").strip()
-    speed = os.environ.get("TTS_SPEED", "1.0").strip()
-    pitch = os.environ.get("TTS_PITCH", "0.0").strip()
-    profile = f"{speaker}-{speed}-{pitch}"
+    speaker = (speaker or os.environ.get("TTS_SPEAKER", "default")).strip()
+    try:
+        speed_value = speed if speed is not None else float(os.environ.get("TTS_SPEED", "1.0"))
+        pitch_value = pitch if pitch is not None else float(os.environ.get("TTS_PITCH", "0.0"))
+    except ValueError:
+        speed_value, pitch_value = 1.0, 0.0
+    profile = f"{speaker}-{speed_value}-{pitch_value}"
     safe_profile = re.sub(r"[^\w.-]", "_", profile)
     object_name = f"tts/{safe_profile}/{get_tts_cache_key(normalized_text)}.mp3"
 
@@ -294,7 +302,12 @@ async def get_or_create_tts_audio(text: str) -> Optional[Tuple[str, int]]:
             print("✅ 命中語音快取")
             return cached
 
-        audio_bytes = await generate_tts_audio_bytes(normalized_text)
+        audio_bytes = await generate_tts_audio_bytes(
+            normalized_text,
+            speaker=speaker,
+            speed=speed_value,
+            pitch=pitch_value,
+        )
         if not audio_bytes:
             return None
 

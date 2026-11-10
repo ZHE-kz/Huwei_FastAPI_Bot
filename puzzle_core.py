@@ -9,6 +9,7 @@ import httpx
 
 from firestore_client import get_db
 from prompt_store import render_prompt
+from liff_auth import owner_key
 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQhKOMFVy6CQusZgXpKZ3rbDjxk0Z3a2Z9tG1MFKJ8hG3jxSUODM6lKDw2x-p1L5dd_SdPMPJOWaeE/pub?gid=531672485&single=true&output=csv"
 PUZZLE_COLLECTION = "PuzzleConfig"
@@ -73,11 +74,17 @@ async def load_puzzle_config():
     return _config_cache
 
 
-async def should_route_to_puzzle(user_id, user_text=""):
+def puzzle_state_document_id(user_id, account_id="default"):
+    return user_id if account_id == "default" else owner_key(account_id, user_id)
+
+
+async def should_route_to_puzzle(user_id, user_text="", account_id="default"):
     config = await load_puzzle_config()
     if user_text.strip() in {config["settings"]["start_command"], END_COMMAND}:
         return True
-    state = get_db().collection("PuzzleState").document(user_id).get()
+    state = get_db().collection("PuzzleState").document(
+        puzzle_state_document_id(user_id, account_id)
+    ).get()
     return state.exists and (state.to_dict() or {}).get("status") != "COMPLETED"
 
 
@@ -98,11 +105,14 @@ async def process_puzzle_event(
     image_base64,
     line_token,
     gemini_key,
+    account_id="default",
 ):
     config = await load_puzzle_config()
     settings = config["settings"]
     stages = config["stages"]
-    state_ref = get_db().collection("PuzzleState").document(user_id)
+    state_ref = get_db().collection("PuzzleState").document(
+        puzzle_state_document_id(user_id, account_id)
+    )
     state_doc = state_ref.get()
     state = state_doc.to_dict() if state_doc.exists else {}
     now = datetime.now(timezone.utc)

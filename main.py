@@ -8,6 +8,7 @@ import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 import httpx
 from datetime import datetime
 from admin_tools import record_deployment_changelog, router as puzzle_admin_router
@@ -17,13 +18,17 @@ from config import (
     GEMINI_API_KEY,
     LINE_ACCESS_TOKEN,
     LINE_CHANNEL_SECRET,
+    PROFILE_PUBLIC_BASE_URL,
     get_line_account_credentials,
 )
 from itinerary_processor import process_image_identification, process_itinerary
-from puzzle_core import process_puzzle_event, should_route_to_puzzle
+from puzzle_core import process_puzzle_event, send_line_reply, should_route_to_puzzle
+from account_links import create_link_token, unlink_bot
 from firestore_client import get_db
 from maps import build_itinerary_google_map_url
 from voice_service import close_http_client
+from liff_api import router as liff_router
+from liff_security import protect_profile_headers
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -38,7 +43,21 @@ async def lifespan(_app):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def protect_profile_responses(request: Request, call_next):
+    response = await call_next(request)
+    protect_profile_headers(request.url.path, response.headers)
+    return response
+
+
 app.include_router(puzzle_admin_router)
+app.include_router(liff_router)
+
+liff_dist = os.path.join(os.path.dirname(__file__), "liff-app", "dist")
+if os.path.isdir(liff_dist):
+    app.mount("/profile", StaticFiles(directory=liff_dist, html=True), name="profile")
 
 missing_env = [
     name
@@ -94,9 +113,31 @@ async def background_task_router(payload: dict, line_token: str, account_id: str
                 await process_beacon_event(event, line_token, account_id)
                 continue
 
+            if message_type == "text" and user_text == "綁定帳號":
+                if not PROFILE_PUBLIC_BASE_URL.startswith("https://"):
+                    await send_line_reply(line_token, reply_token, "個人中心尚未完成設定，請稍後再試。")
+                    continue
+                token = await asyncio.to_thread(create_link_token, account_id, user_id)
+                link_url = (
+                    f"{PROFILE_PUBLIC_BASE_URL}/profile/?account={account_id}"
+                    f"#link_token={token}"
+                )
+                await send_line_reply(
+                    line_token,
+                    reply_token,
+                    f"請於 5 分鐘內開啟連結完成綁定：\n{link_url}",
+                )
+                continue
+
+            if message_type == "text" and user_text == "解除綁定":
+                removed = await asyncio.to_thread(unlink_bot, account_id, user_id)
+                message_text = "帳號綁定已解除。" if removed else "目前沒有已綁定帳號。"
+                await send_line_reply(line_token, reply_token, message_text)
+                continue
+
             await send_loading_animation(user_id, line_token, seconds=60)
 
-            route_to_puzzle = await should_route_to_puzzle(user_id, user_text)
+            route_to_puzzle = await should_route_to_puzzle(user_id, user_text, account_id)
             puzzle_image = None
             if route_to_puzzle and message_type == "image" and message.get("id"):
                 async with httpx.AsyncClient(timeout=15) as client:
@@ -115,6 +156,7 @@ async def background_task_router(payload: dict, line_token: str, account_id: str
                 image_base64=puzzle_image,
                 line_token=line_token,
                 gemini_key=GEMINI_API_KEY,
+                account_id=account_id,
             ):
                 continue
             
@@ -137,7 +179,8 @@ async def background_task_router(payload: dict, line_token: str, account_id: str
                                 # 呼叫圖片辨識核心
                                 result = await process_image_identification(
                                     image_bytes=image_bytes,
-                                    user_id=user_id
+                                    user_id=user_id,
+                                    account_id=account_id,
                                 )
                                 
                                 # 取得辨識後的文字並回傳給 LINE
@@ -149,6 +192,7 @@ async def background_task_router(payload: dict, line_token: str, account_id: str
                                     hist_ref = db.collection("ItineraryHistory").document()
                                     hist_ref.set({
                                         "user_id": user_id,
+                                        "account_id": account_id,
                                         "query": "圖片辨識",
                                         "raw_ai_response": ai_response_text,
                                         "status": "READY",
@@ -205,6 +249,7 @@ async def background_task_router(payload: dict, line_token: str, account_id: str
                 line_token,
                 GEMINI_API_KEY,
                 CWA_API_KEY,
+                account_id,
             )
 
     except Exception as e:

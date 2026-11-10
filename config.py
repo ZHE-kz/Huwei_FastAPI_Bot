@@ -12,6 +12,10 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 CWA_API_KEY = os.environ.get("CWA_API_KEY", "")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 PUZZLE_ADMIN_SECRET = os.environ.get("PUZZLE_ADMIN_SECRET", "")
+LIFF_SESSION_SECRET = os.environ.get("LIFF_SESSION_SECRET", "")
+LINE_LOGIN_CHANNEL_SECRET = os.environ.get("LINE_LOGIN_CHANNEL_SECRET", "")
+PROFILE_PUBLIC_BASE_URL = os.environ.get("PROFILE_PUBLIC_BASE_URL", "").rstrip("/")
+LIFF_COOKIE_SECURE = os.environ.get("LIFF_COOKIE_SECURE", "true").lower() != "false"
 
 
 def get_line_account_credentials(account_id: str, environ=None):
@@ -32,6 +36,41 @@ def get_line_account_credentials(account_id: str, environ=None):
     if not channel_secret or not access_token:
         return None
     return channel_secret, access_token
+
+
+def _account_env_key(account_id: str) -> str:
+    return account_id.upper().replace("-", "_")
+
+
+def get_line_login_channel_id(account_id: str, environ=None):
+    source = os.environ if environ is None else environ
+    if account_id == "default":
+        return source.get("LINE_LOGIN_CHANNEL_ID", "").strip() or None
+    if get_line_account_credentials(account_id, source) is None:
+        return None
+    return source.get(
+        f"LINE_ACCOUNT_{_account_env_key(account_id)}_LOGIN_CHANNEL_ID", ""
+    ).strip() or source.get("LINE_LOGIN_CHANNEL_ID", "").strip() or None
+
+
+def get_liff_id(account_id: str, environ=None):
+    source = os.environ if environ is None else environ
+    if account_id == "default":
+        return source.get("LIFF_ID", "").strip() or None
+    if get_line_account_credentials(account_id, source) is None:
+        return None
+    return (
+        source.get(f"LINE_ACCOUNT_{_account_env_key(account_id)}_LIFF_ID", "").strip()
+        or source.get("LIFF_ID", "").strip()
+        or None
+    )
+
+
+def get_rich_menu_id(account_id: str, language: str, environ=None):
+    source = os.environ if environ is None else environ
+    language_key = language.upper().replace("-", "_")
+    prefix = "" if account_id == "default" else f"LINE_ACCOUNT_{_account_env_key(account_id)}_"
+    return source.get(f"{prefix}RICH_MENU_{language_key}", "").strip() or None
 
 # Flex Message 卡片與 UI 預設設定
 PRIMARY_COLOR = "#1DB446"

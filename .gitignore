@@ -9,3 +9,5 @@ __pycache__/
 .gcloudignore
 cloudflare/.wrangler/
 tts-quality-output/
+liff-app/node_modules/
+liff-app/dist/

@@ -6,4 +6,6 @@ venv
 __pycache__
 *.py[cod]
 *.spec
+liff-app/node_modules
+liff-app/dist
 start_all.bat
