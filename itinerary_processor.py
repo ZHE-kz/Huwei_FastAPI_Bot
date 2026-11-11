@@ -22,6 +22,7 @@ from prompt_store import render_prompt
 from bot_i18n import gemini_language_instruction, text as i18n_text
 from user_profiles import DEFAULT_PREFERENCES, get_profile, normalize_preferences
 from account_links import get_login_identity
+from line_messaging import fit_line_reply_payload
 
 # 🌟 全域宣告模型
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -143,7 +144,7 @@ async def process_itinerary(
         async with httpx.AsyncClient() as client:
             line_url = "https://api.line.me/v2/bot/message/reply"
             headers = {"Content-Type": "application/json", "Authorization": f"Bearer {line_token}"}
-            await client.post(line_url, headers=headers, json=reply_payload, timeout=10.0)
+            await client.post(line_url, headers=headers, json=fit_line_reply_payload(reply_payload), timeout=10.0)
         return
 
     # 🔊 播放語音指令快速攔截 (直接從記憶體 0 延遲抓取)
@@ -185,7 +186,7 @@ async def process_itinerary(
         client = get_http_client()
         line_url = "https://api.line.me/v2/bot/message/reply"
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {line_token}"}
-        res = await client.post(line_url, headers=headers, json=reply_payload, timeout=30.0)
+        res = await client.post(line_url, headers=headers, json=fit_line_reply_payload(reply_payload), timeout=30.0)
         print(f"✅ Reply 語音回覆狀態: {res.status_code}")
         return
 
@@ -200,7 +201,7 @@ async def process_itinerary(
         async with httpx.AsyncClient() as client:
             line_url = "https://api.line.me/v2/bot/message/reply"
             headers = {"Content-Type": "application/json", "Authorization": f"Bearer {line_token}"}
-            await client.post(line_url, headers=headers, json=reply_payload)
+            await client.post(line_url, headers=headers, json=fit_line_reply_payload(reply_payload))
         return
        
     # 🌟 取得台灣當下時間
@@ -369,7 +370,7 @@ async def process_itinerary(
     async with httpx.AsyncClient() as client:
         line_url = "https://api.line.me/v2/bot/message/reply"
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {line_token}"}
-        r = await client.post(line_url, headers=headers, json=reply_payload, timeout=10.0)
+        r = await client.post(line_url, headers=headers, json=fit_line_reply_payload(reply_payload), timeout=10.0)
         print("LINE reply status:", r.status_code, r.text)
 
 
@@ -567,17 +568,12 @@ async def process_image_identification(image_bytes, user_id, account_id="default
 
     intro_response = model.generate_content(intro_prompt)
     
-    easter_egg_plot = ""
-    if best_place == "虎尾糖廠第一工場":
-        easter_egg_plot = (
-            "\n\n─── ⚠️ 系統異常：收到一則加密通訊 ───\n\n"
-            "「滋...滋... 你好，我是壁虎。既然你來到了糖廠，看來你就是我要找的人。\n"
-            "昨晚，虎尾糖廠珍貴的『黃金蔗糖配方』被偷走了！\n"
-            "現場只留下了一串奇怪的腳印，一直延伸到旁邊的舊鐵橋...\n"
-            "你願意幫我找回配方嗎？如果願意，請對我輸入：『壁虎我來幫忙』！」"
-        )
-
-    final_ai_text = f"我判斷這裡應該是「{best_place}」。\n\n{intro_response.text}{easter_egg_plot}"
+    easter_egg_plot = (
+        i18n_text(language, "sugar_factory_easter_egg")
+        if best_place == "虎尾糖廠第一工場"
+        else ""
+    )
+    final_ai_text = f"{intro_response.text}{easter_egg_plot}"
     video = _build_article_video(article) or {}
 
     # ⚡ 完美將圖片辨識結果存入記憶體口袋，語音秒抓！

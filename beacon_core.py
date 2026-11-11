@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 
 import httpx
+from line_messaging import fit_line_reply_payload
 from google.cloud import firestore
 
 from firestore_client import get_db
@@ -125,12 +126,12 @@ async def process_beacon_event(event, line_token, account_id="default"):
         response = await client.post(
             "https://api.line.me/v2/bot/message/reply",
             headers={"Authorization": f"Bearer {line_token}"},
-            json={
+            json=fit_line_reply_payload({
                 "replyToken": reply_token,
                 "messages": [
                     {"type": "text", "text": build_beacon_message(config, event_type)}
                 ],
-            },
+            }),
         )
     if response.status_code != 200:
         print(f"[BEACON] LINE 回覆失敗: {response.status_code}")

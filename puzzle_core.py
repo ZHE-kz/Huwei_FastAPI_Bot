@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import google.generativeai as genai
 import httpx
+from line_messaging import fit_line_reply_payload
 
 from firestore_client import get_db
 from prompt_store import render_prompt
@@ -194,7 +195,9 @@ async def send_line_reply(line_token, reply_token, text):
         response = await client.post(
             "https://api.line.me/v2/bot/message/reply",
             headers={"Authorization": f"Bearer {line_token}"},
-            json={"replyToken": reply_token, "messages": [{"type": "text", "text": text}]},
+            json=fit_line_reply_payload(
+                {"replyToken": reply_token, "messages": [{"type": "text", "text": text}]}
+            ),
         )
     if response.status_code != 200:
         print(f"[PUZZLE] LINE 回覆失敗: {response.status_code} - {response.text}")

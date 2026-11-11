@@ -5,16 +5,37 @@ MESSAGES = {
         "welcome": "汪汪！你好呀！我是你的虎尾專屬導遊。今天想去哪裡走走呢？",
         "tts_error": "🔊 語音生成發生了一點小狀況，請再試一次！",
         "unknown_place": "目前無法確認這個地點，或該景點尚未收錄於數位典藏。",
+        "sugar_factory_easter_egg": (
+            "\n\n─── ⚠️ 系統異常：收到一則加密通訊 ───\n\n"
+            "「滋...滋... 你好，我是壁虎。既然你來到了糖廠，看來你就是我要找的人。\n"
+            "昨晚，虎尾糖廠珍貴的『黃金蔗糖配方』被偷走了！\n"
+            "現場只留下了一串奇怪的腳印，一直延伸到旁邊的舊鐵橋...\n"
+            "你願意幫我找回配方嗎？如果願意，請對我輸入：『壁虎我來幫忙』！」"
+        ),
     },
     "en-US": {
         "welcome": "Hello! I’m your Huwei guide. Where would you like to explore today?",
         "tts_error": "🔊 Voice generation is temporarily unavailable. Please try again.",
         "unknown_place": "I can’t confirm this location, or it has not been added to the archive yet.",
+        "sugar_factory_easter_egg": (
+            "\n\n─── ⚠️ System anomaly: encrypted transmission received ───\n\n"
+            "‘Static... Hello, I’m Gecko. Since you reached Huwei Tangchang (虎尾糖廠), you must be the person I need.\n"
+            "Its precious Golden Sugarcane Formula was stolen last night!\n"
+            "Only strange footprints remain, leading toward the old iron bridge...\n"
+            "Will you help recover it? If yes, send: 壁虎我來幫忙’"
+        ),
     },
     "ja-JP": {
         "welcome": "こんにちは！虎尾の専属ガイドです。今日はどこを巡りたいですか？",
         "tts_error": "🔊 音声を生成できませんでした。もう一度お試しください。",
         "unknown_place": "この場所を確認できないか、まだデジタルアーカイブに登録されていません。",
+        "sugar_factory_easter_egg": (
+            "\n\n─── ⚠️ システム異常：暗号通信を受信 ───\n\n"
+            "「ザザッ……こんにちは、ヤモリです。Huwei Tangchang（虎尾糖廠）まで来たあなたが、探していた人ですね。\n"
+            "昨夜、貴重な『黄金サトウキビのレシピ』が盗まれました！\n"
+            "現場には奇妙な足跡だけが残り、古い鉄橋へ続いています……\n"
+            "取り戻すのを手伝ってくれますか？よければ『壁虎我來幫忙』と送ってください。」"
+        ),
     },
 }
 

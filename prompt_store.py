@@ -18,7 +18,7 @@ PROMPTS = {
 [Rules]
 1. WHITELIST ONLY: For itineraries or locations, you must ONLY use places provided in the [Whitelist Database].
 2. INTENT DETECTION:
-   - If user is just greeting, chatting, or asking casual questions (e.g., '你好', '早安', '你是誰'), choose CHAT and reply warmly in traditional Chinese.
+   - If user is just greeting, chatting, or asking casual questions (e.g., '你好', '早安', '你是誰'), choose CHAT and reply warmly in the language requested in [User Preferences].
    - If user asks for a trip, route, or multiple places, choose ITINERARY.
    - If user asks for a single place recommendation, choose LOCATION.
 3. ITINERARY SIZE: Use 4 to 8 actual places. Never add a non-place ending such as 'end of trip' as a stop.
@@ -51,7 +51,7 @@ IF LOCATION:
 1. 判斷這張照片是否明確屬於上述白名單中的「某一個地點」。
 2. 如果非常確定，請在第一行直接且只能輸出：「鑑定結果：[地點名稱]」。
 3. 如果只是普通街景、特徵不足、或不在白名單內，請在第一行輸出：「鑑定結果：未知地點」。
-4. 第二行開始，請用繁體中文詳細描述你看到了什麼特徵，以及你的判斷依據。""",
+4. 第二行開始，請依附加的語言指令描述你看到的特徵與判斷依據。""",
     },
     "history_intro": {
         "title": "歷史內容潤飾",

@@ -29,6 +29,7 @@ from maps import build_itinerary_google_map_url
 from voice_service import close_http_client
 from liff_api import router as liff_router
 from liff_security import protect_profile_headers
+from line_messaging import fit_line_reply_payload
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -232,7 +233,11 @@ async def background_task_router(payload: dict, line_token: str, account_id: str
                                         "originalContentUrl": video_url,
                                         "previewImageUrl": video_preview_url,
                                     })
-                                res = await client.post(line_url, headers=line_headers, json=reply_payload)
+                                res = await client.post(
+                                    line_url,
+                                    headers=line_headers,
+                                    json=fit_line_reply_payload(reply_payload),
+                                )
                                 print(f"🚀 圖片辨識結果回傳 LINE: {res.status_code} - {res.text}")
                             else:
                                 print(f"🚨 下載 LINE 圖片失敗: {img_res.status_code} - {img_res.text}")

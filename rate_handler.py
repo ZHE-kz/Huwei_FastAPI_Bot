@@ -2,6 +2,7 @@ import traceback
 from datetime import datetime
 from typing import Any, Dict
 import httpx
+from line_messaging import fit_line_reply_payload
 
 from config import PROMOTE_TO_DB_THRESHOLD
 from firestore_client import get_db
@@ -128,7 +129,7 @@ def _send_line_reply(reply_token: str, line_token: str, text_content: str):
             "replyToken": reply_token,
             "messages": [{"type": "text", "text": text_content}],
         }
-        r = httpx.post(line_url, headers=headers, json=text_msg, timeout=5.0)
+        r = httpx.post(line_url, headers=headers, json=fit_line_reply_payload(text_msg), timeout=5.0)
         print("LINE rate reply status:", r.status_code, r.text)
     except Exception:
         traceback.print_exc()
