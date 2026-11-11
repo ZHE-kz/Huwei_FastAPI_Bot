@@ -19,7 +19,7 @@ from ai_client import configure_gemini, generate_itinerary_async
 from flex_builder import create_itinerary_flex, create_simple_location_flex
 from config import PROMOTE_TO_DB_THRESHOLD
 from prompt_store import render_prompt
-from bot_i18n import gemini_language_instruction, text as i18n_text
+from bot_i18n import gemini_history_instruction, gemini_language_instruction, text as i18n_text
 from user_profiles import DEFAULT_PREFERENCES, get_profile, normalize_preferences
 from account_links import get_login_identity
 from line_messaging import fit_line_reply_payload
@@ -560,11 +560,12 @@ async def process_image_identification(image_bytes, user_id, account_id="default
         f"【正文】：{content}"
     )
 
-    intro_prompt = render_prompt(
+    history_language_instruction = gemini_history_instruction(language)
+    intro_prompt = history_language_instruction + "\n\n" + render_prompt(
         "history_intro",
         best_place=best_place,
         local_knowledge=local_knowledge,
-    ) + "\n" + gemini_language_instruction(language)
+    ) + "\n\n" + history_language_instruction
 
     intro_response = model.generate_content(intro_prompt)
     

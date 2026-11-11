@@ -62,3 +62,27 @@ def gemini_language_instruction(language: str) -> str:
         "Use the archive's official romanization when available; otherwise use romanization without tone marks. "
         "Do not alter the original text or invent names."
     )
+
+
+def gemini_history_instruction(language: str) -> str:
+    language = normalize_language(language)
+    if language == "en-US":
+        return (
+            "[MANDATORY OUTPUT LANGUAGE]\n"
+            "Write every sentence of the visitor-facing introduction in English. "
+            "Translate all archive prose into English. Chinese text may appear only as the original "
+            "proper noun in parentheses after its official English or Latin-script romanization. "
+            "Always use the order Huwei (虎尾), never 虎尾 (Huwei). "
+            "Do not invent names or facts."
+        )
+    if language == "ja-JP":
+        return (
+            "[MANDATORY OUTPUT LANGUAGE]\n"
+            "来訪者向けの紹介文は、すべて日本語で書いてください。典藏本文も日本語にしてください。"
+            "中国語の原文は、固有名詞の公式ローマ字表記の直後に括弧でのみ表示してください。"
+            "必ず Huwei（虎尾）の順にし、虎尾（Huwei）の順にはしないでください。"
+            "名称や事実を創作しないでください。"
+        )
+    return (
+        "[必要輸出語言]\n請以繁體中文撰寫完整導覽介紹，並保持典藏中的歷史名稱與專有名詞原文。"
+    )
