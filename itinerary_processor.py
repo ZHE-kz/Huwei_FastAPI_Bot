@@ -22,11 +22,12 @@ from prompt_store import render_prompt
 from bot_i18n import gemini_history_instruction, gemini_language_instruction, text as i18n_text
 from user_profiles import DEFAULT_PREFERENCES, get_profile, normalize_preferences
 from account_links import get_login_identity
-from line_messaging import fit_line_reply_payload
+from line_messaging import fit_line_reply_payload, fit_line_text_with_footer
 
 # 🌟 全域宣告模型
 model = genai.GenerativeModel("gemini-2.5-flash")
 ARCHIVE_ARTICLES_URL = "https://nfu-digital-archive.zheforge.com/api/articles?category=history"
+ARCHIVE_COLLECTION_URL = "https://nfu-digital-archive.zheforge.com/collection"
 
 # ==========================================
 # ⚡ 記憶體暫存口袋 (0 延遲且不用讀資料庫)
@@ -456,6 +457,13 @@ def _image_mime_type(image_bytes):
     return "image/jpeg"
 
 
+def _archive_article_url(article):
+    slug = str(article.get("slug", "")).strip()
+    if not slug:
+        return ""
+    return f"{ARCHIVE_COLLECTION_URL}?slug={urllib.parse.quote(slug, safe='')}"
+
+
 async def process_image_identification(image_bytes, user_id, account_id="default"):
     """從數位典藏歷史館抓取文章，進行視覺辨識與導覽生成"""
     image_hash = hashlib.sha256(image_bytes).hexdigest()
@@ -574,7 +582,16 @@ async def process_image_identification(image_bytes, user_id, account_id="default
         if best_place == "虎尾糖廠第一工場"
         else ""
     )
-    final_ai_text = f"{intro_response.text}{easter_egg_plot}"
+    archive_url = _archive_article_url(article)
+    archive_footer = (
+        f"{i18n_text(language, 'archive_source')}\n{archive_url}"
+        if archive_url
+        else ""
+    )
+    final_ai_text = fit_line_text_with_footer(
+        f"{intro_response.text}{easter_egg_plot}",
+        archive_footer,
+    )
     video = _build_article_video(article) or {}
 
     # ⚡ 完美將圖片辨識結果存入記憶體口袋，語音秒抓！

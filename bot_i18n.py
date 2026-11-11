@@ -5,6 +5,7 @@ MESSAGES = {
         "welcome": "汪汪！你好呀！我是你的虎尾專屬導遊。今天想去哪裡走走呢？",
         "tts_error": "🔊 語音生成發生了一點小狀況，請再試一次！",
         "unknown_place": "目前無法確認這個地點，或該景點尚未收錄於數位典藏。",
+        "archive_source": "查看典藏網完整資料：",
         "sugar_factory_easter_egg": (
             "\n\n─── ⚠️ 系統異常：收到一則加密通訊 ───\n\n"
             "「滋...滋... 你好，我是壁虎。既然你來到了糖廠，看來你就是我要找的人。\n"
@@ -17,6 +18,7 @@ MESSAGES = {
         "welcome": "Hello! I’m your Huwei guide. Where would you like to explore today?",
         "tts_error": "🔊 Voice generation is temporarily unavailable. Please try again.",
         "unknown_place": "I can’t confirm this location, or it has not been added to the archive yet.",
+        "archive_source": "View the full archive record:",
         "sugar_factory_easter_egg": (
             "\n\n─── ⚠️ System anomaly: encrypted transmission received ───\n\n"
             "‘Static... Hello, I’m Gecko. Since you reached Huwei Tangchang (虎尾糖廠), you must be the person I need.\n"
@@ -29,6 +31,7 @@ MESSAGES = {
         "welcome": "こんにちは！虎尾の専属ガイドです。今日はどこを巡りたいですか？",
         "tts_error": "🔊 音声を生成できませんでした。もう一度お試しください。",
         "unknown_place": "この場所を確認できないか、まだデジタルアーカイブに登録されていません。",
+        "archive_source": "デジタルアーカイブの詳細：",
         "sugar_factory_easter_egg": (
             "\n\n─── ⚠️ システム異常：暗号通信を受信 ───\n\n"
             "「ザザッ……こんにちは、ヤモリです。Huwei Tangchang（虎尾糖廠）まで来たあなたが、探していた人ですね。\n"
@@ -70,6 +73,7 @@ def gemini_history_instruction(language: str) -> str:
         return (
             "[MANDATORY OUTPUT LANGUAGE]\n"
             "Write every sentence of the visitor-facing introduction in English. "
+            "Keep the introduction concise and under 650 words. "
             "Translate all archive prose into English. Chinese text may appear only as the original "
             "proper noun in parentheses after its official English or Latin-script romanization. "
             "Always use the order Huwei (虎尾), never 虎尾 (Huwei). "
@@ -79,10 +83,11 @@ def gemini_history_instruction(language: str) -> str:
         return (
             "[MANDATORY OUTPUT LANGUAGE]\n"
             "来訪者向けの紹介文は、すべて日本語で書いてください。典藏本文も日本語にしてください。"
+            "紹介文は簡潔にし、1,400文字以内にしてください。"
             "中国語の原文は、固有名詞の公式ローマ字表記の直後に括弧でのみ表示してください。"
             "必ず Huwei（虎尾）の順にし、虎尾（Huwei）の順にはしないでください。"
             "名称や事実を創作しないでください。"
         )
     return (
-        "[必要輸出語言]\n請以繁體中文撰寫完整導覽介紹，並保持典藏中的歷史名稱與專有名詞原文。"
+        "[必要輸出語言]\n請以繁體中文撰寫完整導覽介紹，控制在 1,400 字內，並保持典藏中的歷史名稱與專有名詞原文。"
     )

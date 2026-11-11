@@ -21,6 +21,18 @@ def split_line_text(text: str, limit: int = LINE_TEXT_LIMIT) -> list[str]:
     return [chunk for chunk in chunks if chunk]
 
 
+def fit_line_text_with_footer(text: str, footer: str, limit: int = LINE_TEXT_LIMIT) -> str:
+    footer = str(footer or "").strip()
+    suffix = f"\n\n{footer}" if footer else ""
+    if len(suffix) >= limit:
+        return suffix[-limit:].lstrip()
+    available = limit - len(suffix)
+    body = str(text or "").strip()
+    if len(body) > available:
+        body = split_line_text(body, max(1, available - 1))[0].rstrip() + "…"
+    return f"{body}{suffix}"
+
+
 def fit_line_reply_payload(payload: dict) -> dict:
     """Keep every LINE text message valid and the reply at five messages or fewer."""
     messages = list(payload.get("messages") or [])
