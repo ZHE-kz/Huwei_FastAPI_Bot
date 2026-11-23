@@ -22,12 +22,16 @@ from prompt_store import render_prompt
 from bot_i18n import gemini_history_instruction, gemini_language_instruction, text as i18n_text
 from user_profiles import DEFAULT_PREFERENCES, get_profile, normalize_preferences
 from account_links import get_login_identity
+from archive_search import (
+    build_archive_url,
+    format_archive_context,
+    retrieve_archive_articles,
+)
 from line_messaging import fit_line_reply_payload, fit_line_text_with_footer
 
 # 🌟 全域宣告模型
 model = genai.GenerativeModel("gemini-2.5-flash")
 ARCHIVE_ARTICLES_URL = "https://nfu-digital-archive.zheforge.com/api/articles?category=history"
-ARCHIVE_COLLECTION_URL = "https://nfu-digital-archive.zheforge.com/collection"
 
 # ==========================================
 # ⚡ 記憶體暫存口袋 (0 延遲且不用讀資料庫)
@@ -215,9 +219,10 @@ async def process_itinerary(
         weather_task = fetch_weather_async(client, cwa_key)
         whitelist_task = asyncio.to_thread(fetch_whitelist_sync)
         examples_task = asyncio.to_thread(fetch_best_examples_sync, db)
+        archive_task = retrieve_archive_articles(client, user_text)
         
-        weather, whitelist, best_examples = await asyncio.gather(
-            weather_task, whitelist_task, examples_task
+        weather, whitelist, best_examples, archive_articles = await asyncio.gather(
+            weather_task, whitelist_task, examples_task, archive_task
         )
 
     history_context = ""
@@ -244,6 +249,17 @@ async def process_itinerary(
         + gemini_language_instruction(language)
         + "\n"
     )
+    if archive_articles:
+        history_context += (
+            "\n[ARCHIVE-FIRST POLICY]\n"
+            "The records below are the primary source for this answer. "
+            "For factual, historical, collection, person, place, or object questions, choose CHAT. "
+            "Answer only claims supported by these records. If the records are incomplete, say so clearly. "
+            "Do not invent facts or URLs; the application appends source links.\n\n"
+            "[RELEVANT ARCHIVE RECORDS]\n"
+            + format_archive_context(archive_articles)
+            + "\n"
+        )
 
     # 🧠 三模式 AI 判斷 Prompt
     prompt = render_prompt(
@@ -308,6 +324,19 @@ async def process_itinerary(
         stops_str = "、".join([s.get("location", "") for s in stops_list])
         tts_cache_text = f"為您規劃的行程是 {parsed.get('title')}。途經景點包含：{stops_str}。"
 
+    reply_text = tts_cache_text
+    if intent_type == "chat" and archive_articles:
+        source_lines = []
+        for article in archive_articles[:3]:
+            source_url = build_archive_url(article)
+            if source_url:
+                source_lines.append(f"{article.get('title', '')}\n{source_url}")
+        if source_lines:
+            reply_text = fit_line_text_with_footer(
+                tts_cache_text,
+                f"{i18n_text(language, 'archive_sources')}\n" + "\n".join(source_lines),
+            )
+
     # ⚡ 瞬間存入口袋！
     set_user_cache(user_id, tts_cache_text)
 
@@ -335,7 +364,7 @@ async def process_itinerary(
         if intent_type == "chat":
             reply_payload = {
                 "replyToken": reply_token,
-                "messages": [{"type": "text", "text": tts_cache_text}],
+                "messages": [{"type": "text", "text": reply_text}],
             }
         elif intent_type == "location":
             location_name = parsed.get("name")
@@ -458,10 +487,7 @@ def _image_mime_type(image_bytes):
 
 
 def _archive_article_url(article):
-    slug = str(article.get("slug", "")).strip()
-    if not slug:
-        return ""
-    return f"{ARCHIVE_COLLECTION_URL}?slug={urllib.parse.quote(slug, safe='')}"
+    return build_archive_url(article)
 
 
 async def process_image_identification(image_bytes, user_id, account_id="default"):

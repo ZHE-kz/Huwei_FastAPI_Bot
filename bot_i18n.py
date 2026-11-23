@@ -6,6 +6,7 @@ MESSAGES = {
         "tts_error": "🔊 語音生成發生了一點小狀況，請再試一次！",
         "unknown_place": "目前無法確認這個地點，或該景點尚未收錄於數位典藏。",
         "archive_source": "查看典藏網完整資料：",
+        "archive_sources": "館藏資料來源：",
         "sugar_factory_easter_egg": (
             "\n\n─── ⚠️ 系統異常：收到一則加密通訊 ───\n\n"
             "「滋...滋... 你好，我是壁虎。既然你來到了糖廠，看來你就是我要找的人。\n"
@@ -19,6 +20,7 @@ MESSAGES = {
         "tts_error": "🔊 Voice generation is temporarily unavailable. Please try again.",
         "unknown_place": "I can’t confirm this location, or it has not been added to the archive yet.",
         "archive_source": "View the full archive record:",
+        "archive_sources": "Archive sources:",
         "sugar_factory_easter_egg": (
             "\n\n─── ⚠️ System anomaly: encrypted transmission received ───\n\n"
             "‘Static... Hello, I’m Gecko. Since you reached Huwei Tangchang (虎尾糖廠), you must be the person I need.\n"
@@ -32,6 +34,7 @@ MESSAGES = {
         "tts_error": "🔊 音声を生成できませんでした。もう一度お試しください。",
         "unknown_place": "この場所を確認できないか、まだデジタルアーカイブに登録されていません。",
         "archive_source": "デジタルアーカイブの詳細：",
+        "archive_sources": "デジタルアーカイブ資料：",
         "sugar_factory_easter_egg": (
             "\n\n─── ⚠️ システム異常：暗号通信を受信 ───\n\n"
             "「ザザッ……こんにちは、ヤモリです。Huwei Tangchang（虎尾糖廠）まで来たあなたが、探していた人ですね。\n"
